@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Business Banking Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect width="28" height="28" rx="8" fill="#2563eb"/>
+          <path d="M6 20V13l8-6 8 6v7H17v-5h-6v5H6z" fill="#fff"/>
+        </svg>
+        <span>Business Banking</span>
+      </div>
+      <div class="header-right">
+        <div class="live-indicator" id="liveIndicator">
+          <span class="pulse"></span> Live
+        </div>
+        <span class="last-updated" id="lastUpdated">Fetching…</span>
+        <button class="btn-primary" onclick="connectBank()">+ Connect Bank</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Notification bar -->
+  <div class="notif" id="notif" style="display:none"></div>
+
+  <main class="main">
+    <!-- Summary cards -->
+    <section class="summary-row" id="summaryRow">
+      <div class="summary-card">
+        <div class="summary-label">Total Balance</div>
+        <div class="summary-value" id="totalBalance">—</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Connected Banks</div>
+        <div class="summary-value" id="totalBanks">0</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Total Accounts</div>
+        <div class="summary-value" id="totalAccounts">0</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Recent Transactions</div>
+        <div class="summary-value" id="totalTxns">0</div>
+      </div>
+    </section>
+
+    <!-- Empty state -->
+    <div class="empty" id="emptyState">
+      <div class="empty-icon">🏦</div>
+      <h2>No banks connected yet</h2>
+      <p>Connect your business bank accounts to see live balances and transactions across all of them in one place.</p>
+      <button class="btn-primary btn-large" onclick="connectBank()">Connect your first bank</button>
+      <p class="powered">Powered by <strong>TrueLayer Open Banking</strong></p>
+    </div>
+
+    <!-- Bank feeds -->
+    <div id="feeds"></div>
+  </main>
+
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>
