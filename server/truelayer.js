@@ -4,6 +4,17 @@ const store = require('./store');
 const AUTH_URL = process.env.TRUELAYER_AUTH_URL || 'https://auth.truelayer-sandbox.com';
 const API_URL  = process.env.TRUELAYER_API_URL  || 'https://api.truelayer-sandbox.com';
 
+function getAuthUrl() {
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id:     process.env.TRUELAYER_CLIENT_ID,
+    redirect_uri:  process.env.REDIRECT_URI,
+    scope:         'info accounts balance cards transactions offline_access',
+    providers:     'uk-cs-mock',
+  });
+  return `${AUTH_URL}/?${params.toString()}`;
+}
+
 async function exchangeCode(code) {
   const { data } = await axios.post(`${AUTH_URL}/connect/token`, new URLSearchParams({
     grant_type:    'authorization_code',
@@ -98,6 +109,7 @@ async function getCardTransactions(token, accountId) {
 }
 
 module.exports = {
+  getAuthUrl,
   exchangeCode,
   ensureFreshToken,
   getInfo,

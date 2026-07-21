@@ -184,26 +184,10 @@ function buildTxnRow(t, currency) {
 // ── Actions ───────────────────────────────────────────────────────────────────
 async function connectBank() {
   try {
-    const res = await fetch('/api/create-link-token', { method: 'POST' });
-    const { link_token, error } = await res.json();
+    const res = await fetch('/api/connect-url');
+    const { url, error } = await res.json();
     if (error) { showNotif('Error: ' + error, 'error'); return; }
-
-    const handler = Plaid.create({
-      token: link_token,
-      onSuccess: async (public_token, metadata) => {
-        await fetch('/api/exchange-token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ public_token, metadata }),
-        });
-        showNotif('Bank connected successfully!', 'success');
-        refresh();
-      },
-      onExit: (err) => {
-        if (err) showNotif('Connection cancelled', 'error');
-      },
-    });
-    handler.open();
+    window.location.href = url;
   } catch (err) {
     showNotif('Failed to open bank connection', 'error');
   }

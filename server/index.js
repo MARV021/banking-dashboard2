@@ -1,10 +1,12 @@
 require('dotenv').config();
+const fs = require('fs');
+const https = require('https');
 const express = require('express');
 const session = require('express-session');
 const cors = require('cors');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
-const plaid = require('./plaid');
+const truelayer = require('./truelayer');
 const store = require('./store');
 
 const app = express();
@@ -20,38 +22,34 @@ app.use(session({
   cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-// ── Step 1: frontend requests a link token to open Plaid Link ────────────────
-app.post('/api/create-link-token', async (req, res) => {
-  try {
-    const linkToken = await plaid.createLinkToken();
-    res.json({ link_token: linkToken });
-  } catch (err) {
-    console.error('create-link-token error:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Failed to create link token' });
-  }
+// ── Step 1: frontend asks where to send the browser to connect a bank ────────
+app.get('/api/connect-url', (req, res) => {
+  res.json({ url: truelayer.getAuthUrl() });
 });
 
-// ── Step 2: frontend sends back the public token after bank login ─────────────
-app.post('/api/exchange-token', async (req, res) => {
-  const { public_token, metadata } = req.body;
-  try {
-    const accessToken = await plaid.exchangePublicToken(public_token);
-    const item        = await plaid.getItem(accessToken);
-    const institution = await plaid.getInstitution(item?.institution_id);
+// ── Step 2: TrueLayer redirects back here after the user logs into their bank ─
+app.get('/auth/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error) return res.redirect(`/?error=${encodeURIComponent(error)}`);
 
-    const connectionId = uuidv4();
+  try {
+    const tokens = await truelayer.exchangeCode(code);
+    const info   = await truelayer.getInfo(tokens.access_token);
+
     store.saveConnection({
-      id: connectionId,
-      label: institution?.name || metadata?.institution?.name || 'Bank',
-      provider: institution?.name || 'Unknown',
-      accessToken,
+      id: uuidv4(),
+      label: info?.full_name || 'Bank',
+      provider: 'TrueLayer',
+      accessToken:  tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresAt:    Date.now() + tokens.expires_in * 1000,
       connectedAt: Date.now(),
     });
 
-    res.json({ ok: true, connectionId });
+    res.redirect('/?connected=true');
   } catch (err) {
-    console.error('exchange-token error:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Failed to connect bank' });
+    console.error('auth/callback error:', err.response?.data || err.message);
+    res.redirect('/?error=Failed to connect bank');
   }
 });
 
@@ -79,42 +77,48 @@ app.get('/api/data', async (req, res) => {
 
   const results = await Promise.allSettled(
     connections.map(async (conn) => {
-      const [accounts, transactions] = await Promise.allSettled([
-        plaid.getAccounts(conn.accessToken),
-        plaid.getTransactions(conn.accessToken),
+      const token = await truelayer.ensureFreshToken(conn);
+
+      const [accountList, cardList] = await Promise.all([
+        truelayer.getAccounts(token),
+        truelayer.getCards(token),
       ]);
 
-      const accountList = accounts.status === 'fulfilled' ? accounts.value : [];
-      const txnList     = transactions.status === 'fulfilled' ? transactions.value : [];
+      const accounts = await Promise.all(accountList.map(async (acct) => {
+        const [balance, transactions] = await Promise.all([
+          truelayer.getBalance(token, acct.account_id),
+          truelayer.getTransactions(token, acct.account_id),
+        ]);
+        return {
+          account_id: acct.account_id,
+          display_name: acct.display_name,
+          account_type: acct.account_type,
+          account_number: acct.account_number,
+          balance,
+          transactions: transactions.slice(0, 20),
+        };
+      }));
 
-      // Attach transactions to their account
-      const enriched = accountList.map(acct => ({
-        account_id:   acct.account_id,
-        display_name: acct.name,
-        account_type: acct.subtype || acct.type,
-        account_number: { number: acct.mask ? `•••• ${acct.mask}` : '' },
-        balance: {
-          current:   acct.balances.current,
-          available: acct.balances.available,
-          currency:  acct.balances.iso_currency_code || 'GBP',
-        },
-        transactions: txnList
-          .filter(t => t.account_id === acct.account_id)
-          .slice(0, 20)
-          .map(t => ({
-            description: t.name,
-            amount: -t.amount, // Plaid uses negative for debits
-            timestamp: t.date,
-            transaction_classification: t.category || [],
-          })),
+      const cards = await Promise.all(cardList.map(async (card) => {
+        const [balance, transactions] = await Promise.all([
+          truelayer.getCardBalance(token, card.account_id),
+          truelayer.getCardTransactions(token, card.account_id),
+        ]);
+        return {
+          account_id: card.account_id,
+          display_name: card.display_name,
+          card_type: card.card_type,
+          balance,
+          transactions: transactions.slice(0, 20),
+        };
       }));
 
       return {
         connectionId: conn.id,
         label: conn.label,
         provider: conn.provider,
-        accounts: enriched,
-        cards: [],
+        accounts,
+        cards,
         fetchedAt: Date.now(),
       };
     })
@@ -123,6 +127,18 @@ app.get('/api/data', async (req, res) => {
   res.json(results.filter(r => r.status === 'fulfilled').map(r => r.value));
 });
 
-app.listen(PORT, () => {
-  console.log(`Banking dashboard running at http://localhost:${PORT}`);
-});
+const certPath = path.join(__dirname, '../certs/localhost.pem');
+const keyPath  = path.join(__dirname, '../certs/localhost-key.pem');
+
+if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+  https.createServer({
+    cert: fs.readFileSync(certPath),
+    key:  fs.readFileSync(keyPath),
+  }, app).listen(PORT, () => {
+    console.log(`Banking dashboard running at https://localhost:${PORT}`);
+  });
+} else {
+  app.listen(PORT, () => {
+    console.log(`Banking dashboard running at http://localhost:${PORT}`);
+  });
+}
