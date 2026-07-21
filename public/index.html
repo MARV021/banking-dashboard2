@@ -22,13 +22,27 @@
           <span class="pulse"></span> Live
         </div>
         <span class="last-updated" id="lastUpdated">Fetching…</span>
-        <button class="btn-primary" onclick="connectBank()">+ Connect Bank</button>
+        <button class="btn-primary" onclick="connectStarling()">+ Starling</button>
+        <button class="btn-primary" onclick="openBankPicker()">+ Other Bank</button>
       </div>
     </div>
   </header>
 
   <!-- Notification bar -->
   <div class="notif" id="notif" style="display:none"></div>
+
+  <!-- Bank picker (Enable Banking) -->
+  <div class="modal-overlay" id="bankPickerOverlay" style="display:none">
+    <div class="modal">
+      <h3>Connect a UK bank</h3>
+      <p>Powered by Enable Banking's free Open Banking access to your own accounts.</p>
+      <select id="bankPickerSelect"><option>Loading banks…</option></select>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeBankPicker()">Cancel</button>
+        <button class="btn-primary" onclick="connectPickedBank()">Connect</button>
+      </div>
+    </div>
+  </div>
 
   <main class="main">
     <!-- Summary cards -->
@@ -55,9 +69,10 @@
     <div class="empty" id="emptyState">
       <div class="empty-icon">🏦</div>
       <h2>No banks connected yet</h2>
-      <p>Connect your business bank accounts to see live balances and transactions across all of them in one place.</p>
-      <button class="btn-primary btn-large" onclick="connectBank()">Connect your first bank</button>
-      <p class="powered">Powered by <strong>TrueLayer Open Banking</strong></p>
+      <p>Connect your Starling account directly, or link any other UK bank via Open Banking — both free for tracking your own accounts.</p>
+      <button class="btn-primary btn-large" onclick="connectStarling()">Connect Starling</button>
+      <button class="btn-primary btn-large" onclick="openBankPicker()">Connect another bank</button>
+      <p class="powered">Powered by <strong>Starling</strong> &amp; <strong>Enable Banking</strong> Open Banking</p>
     </div>
 
     <!-- Bank feeds -->
