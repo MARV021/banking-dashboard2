@@ -4,13 +4,18 @@ const store = require('./store');
 const AUTH_URL = process.env.TRUELAYER_AUTH_URL || 'https://auth.truelayer-sandbox.com';
 const API_URL  = process.env.TRUELAYER_API_URL  || 'https://api.truelayer-sandbox.com';
 
+// uk-cs-mock only exists in Sandbox (fake test banks). Production needs the
+// real UK provider set, otherwise the bank picker has nothing to show.
+const PROVIDERS = process.env.TRUELAYER_PROVIDERS
+  || (AUTH_URL.includes('sandbox') ? 'uk-cs-mock' : 'uk-ob-all uk-oauth-all');
+
 function getAuthUrl() {
   const params = new URLSearchParams({
     response_type: 'code',
     client_id:     process.env.TRUELAYER_CLIENT_ID,
     redirect_uri:  process.env.REDIRECT_URI,
     scope:         'info accounts balance cards transactions offline_access',
-    providers:     'uk-cs-mock',
+    providers:     PROVIDERS,
   });
   return `${AUTH_URL}/?${params.toString()}`;
 }
