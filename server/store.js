@@ -26,4 +26,11 @@ module.exports = {
       conn.expiresAt    = expiresAt;
     }
   },
+  updateTransactions(id, { cursor, transactions }) {
+    const conn = connections.get(id);
+    if (conn) {
+      conn.transactionsCursor = cursor;
+      conn.transactions = transactions;
+    }
+  },
 };

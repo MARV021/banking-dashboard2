@@ -182,46 +182,36 @@ function buildTxnRow(t, currency) {
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
-async function connectStarling() {
+async function connectBank() {
   try {
-    const res = await fetch('/api/connect/starling', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) { showNotif('Error: ' + data.error, 'error'); return; }
-    showNotif('Starling connected!', 'success');
-    refresh();
+    const res = await fetch('/api/create-link-token', { method: 'POST' });
+    const { link_token, error } = await res.json();
+    if (error) { showNotif('Error: ' + error, 'error'); return; }
+
+    const handler = Plaid.create({
+      token: link_token,
+      onSuccess: async (public_token, metadata) => {
+        await fetch('/api/exchange-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ public_token, metadata }),
+        });
+        showNotif('Bank connected successfully!', 'success');
+        refresh();
+      },
+      onExit: (err) => {
+        if (err) showNotif('Connection cancelled', 'error');
+      },
+    });
+    handler.open();
   } catch (err) {
-    showNotif('Failed to connect Starling', 'error');
+    showNotif('Failed to open bank connection', 'error');
   }
 }
 
-async function openBankPicker() {
-  const overlay = document.getElementById('bankPickerOverlay');
-  const select = document.getElementById('bankPickerSelect');
-  overlay.style.display = 'flex';
-  select.innerHTML = '<option>Loading banks…</option>';
-
+async function connectTrueLayer() {
   try {
-    const res = await fetch('/api/aspsps?country=GB');
-    const aspsps = await res.json();
-    if (!Array.isArray(aspsps) || !aspsps.length) throw new Error('empty');
-    select.innerHTML = aspsps
-      .map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`)
-      .join('');
-  } catch (err) {
-    select.innerHTML = '<option>Failed to load bank list</option>';
-  }
-}
-
-function closeBankPicker() {
-  document.getElementById('bankPickerOverlay').style.display = 'none';
-}
-
-async function connectPickedBank() {
-  const aspsp = document.getElementById('bankPickerSelect').value;
-  if (!aspsp) return;
-
-  try {
-    const res = await fetch(`/api/connect/enablebanking?aspsp=${encodeURIComponent(aspsp)}&country=GB`);
+    const res = await fetch('/api/connect-url');
     const { url, error } = await res.json();
     if (error) { showNotif('Error: ' + error, 'error'); return; }
     window.location.href = url;

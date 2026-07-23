@@ -1,39 +1,28 @@
 # Business Banking Dashboard — Setup Guide
 
 ## What this does
-A live multi-bank dashboard for your own business accounts. Two free connection methods:
-- **Starling** — direct Personal Access Token, no OAuth needed
-- **Any other UK bank** — Open Banking via Enable Banking's free "Restricted Production" tier, limited to accounts you link yourself
+A live multi-bank dashboard powered by Plaid. Connect as many bank accounts as you want via Plaid Link. Balances and transactions auto-refresh every 30 seconds using Plaid's `/transactions/sync` endpoint.
 
-Balances and transactions auto-refresh every 30 seconds.
+**Cost note:** Plaid Sandbox (fake test banks) is free forever. Connecting real accounts in Production costs money — see pricing below.
 
 ---
 
-## Step 1 — Connect Starling (optional)
+## Step 1 — Create a Plaid account
 
-1. Log into your Starling account at https://developer.starlingbank.com
-2. Go to **Personal Access** → generate a token, scanning the QR code with the Starling app
-3. Grant `account:read`, `balance:read`, `transaction:read` permissions
-4. Copy the token into `.env`:
-   ```
-   STARLING_PERSONAL_ACCESS_TOKEN=your_token_here
-   ```
+1. Go to https://dashboard.plaid.com/signup and sign up (free)
+2. Go to **Team Settings → Keys** to get your `client_id` and `secret`
+3. Start in **Sandbox** — fake test banks, no real money, no cost
 
 ---
 
-## Step 2 — Connect other UK banks via Enable Banking (optional)
+## Step 2 — Configure the app
 
-1. Sign up at https://enablebanking.com/sign-in/ (free, email-based)
-2. Go to **API applications** → **Add a new application**
-   - Keep it in the **Sandbox** environment while testing, switch to **Production** (Restricted mode) once ready for your real accounts
-   - Set the redirect URL to `https://localhost:3000/auth/enablebanking/callback`
-3. Registering downloads a private key file (`.pem`) — save it into `certs/enablebanking-private-key.pem`
-4. Copy your application ID into `.env`:
-   ```
-   ENABLEBANKING_APP_ID=your_application_id_here
-   ENABLEBANKING_PRIVATE_KEY_PATH=./certs/enablebanking-private-key.pem
-   ```
-5. **Activate Restricted Production** in the Enable Banking control panel by linking your own account(s) — this keeps it free. Adding other people's accounts moves you onto their paid tier.
+Edit `.env`:
+```
+PLAID_CLIENT_ID=your_actual_client_id
+PLAID_SECRET=your_sandbox_secret
+PLAID_ENV=sandbox
+```
 
 ---
 
@@ -45,26 +34,42 @@ npm install
 npm start
 ```
 
-Open https://localhost:3000 in your browser (accept the local dev certificate warning once).
+Open https://localhost:3000 (accept the local dev certificate warning once).
 
 ---
 
-## Step 4 — Connect your accounts
+## Step 4 — Connect a bank
 
-- Click **+ Starling** to instantly connect using the token from `.env`
-- Click **+ Other Bank** to pick a UK bank from the list, then log in with your bank credentials on their own site (Enable Banking never sees or stores them)
-
-Repeat for every account. Each bank gets its own card.
+1. Click **+ Connect Bank**
+2. Plaid Link opens — in Sandbox, search for any bank name and log in with:
+   - Username: `user_good`
+   - Password: `pass_good`
+3. You're redirected back and your live feed appears
 
 ---
 
-## Going to production
+## Going to production (real accounts, real cost)
 
-1. Switch the Enable Banking application from Sandbox to **Production (Restricted mode)** in their control panel
-2. Update `APP_URL` to your real domain and register the matching redirect URL with Enable Banking
-3. Replace the in-memory store (`server/store.js`) with a real database — Starling tokens and Enable Banking session IDs are sensitive and must be **encrypted at rest**
-4. Use HTTPS with a real certificate (Let's Encrypt), not the local `mkcert` cert
-5. Starling's personal token is tied to your own account only — it doesn't need a "production" switch
+1. Apply for Production access in the Plaid dashboard
+2. Swap in your **Production** secret and set `PLAID_ENV=production`
+3. Replace the in-memory store (`server/store.js`) with a real database — access tokens are sensitive and must be **encrypted at rest**
+4. Use HTTPS with a real certificate, not the local `mkcert` cert
+
+### Pricing (pay-as-you-go, per Vendr's reported figures — Plaid doesn't publish a public rate card)
+
+| Product | Price per successful call |
+|---|---|
+| Balance | $0.05 – $0.15 |
+| Auth | $0.10 – $0.25 |
+| Identity | $0.15 – $0.30 |
+| Transactions | $0.30 – $0.60 |
+| Income | $1.00 – $3.00+ |
+
+- Reported median annual spend across Plaid customers: **~$9,230/year** ($6,667–$45,000 typical range)
+- Small-scale commercial minimums: **$1,000–$3,000/month**
+- Implementation/onboarding fees on larger contracts: **$5,000–$25,000+**
+
+This app only uses the **Transactions** and **Balance** products (via `/accounts/get` + `/transactions/sync`), so real usage would land toward the lower end of that table — but there's no way to get real Production pricing without applying through Plaid's dashboard.
 
 ---
 
@@ -72,8 +77,7 @@ Repeat for every account. Each bank gets its own card.
 
 | Feature | Detail |
 |---|---|
-| Multiple banks | Connect Starling plus any number of other UK banks — each gets its own card |
+| Multiple banks | Connect unlimited accounts — each gets its own card |
 | Live refresh | Balances + transactions update every 30 seconds |
-| No paid aggregator | Starling direct + Enable Banking's free Restricted Production tier — $0/month for tracking your own accounts |
-| Transaction icons | Auto-categorised with emoji |
+| Incremental sync | Uses `/transactions/sync` (cursor-based), not a full re-fetch every poll |
 | Disconnect | Remove any bank in one click |

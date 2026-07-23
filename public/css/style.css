@@ -288,49 +288,6 @@ body {
 }
 .show-more:hover { text-decoration: underline; }
 
-/* ── Modal (bank picker) ──────────────────────────────── */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-}
-.modal {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 24px;
-  width: 360px;
-  max-width: calc(100vw - 32px);
-}
-.modal h3 { font-size: 16px; margin-bottom: 8px; }
-.modal p { color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 16px; }
-.modal select {
-  width: 100%;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 13px;
-  margin-bottom: 18px;
-}
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.btn-secondary {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 8px 16px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.btn-secondary:hover { border-color: var(--muted); }
-
 /* ── Skeleton loader ──────────────────────────────────── */
 .skeleton {
   background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
