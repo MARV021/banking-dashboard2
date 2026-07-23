@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Business Banking Dashboard — Login</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f1117;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2a2f45;
+      border-radius: 12px;
+      padding: 32px;
+      width: 340px;
+      max-width: calc(100vw - 32px);
+    }
+    h1 { font-size: 18px; margin-bottom: 6px; }
+    p { color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
+    input {
+      width: 100%;
+      background: #22263a;
+      border: 1px solid #2a2f45;
+      color: #f1f5f9;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    button {
+      width: 100%;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #3b82f6; }
+    .error { color: #ef4444; font-size: 13px; margin-top: 10px; display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Business Banking Dashboard</h1>
+    <p>Enter the shared password to view live company accounts.</p>
+    <form id="loginForm">
+      <input type="password" id="password" placeholder="Password" autofocus required />
+      <button type="submit">Log in</button>
+      <div class="error" id="error">Incorrect password</div>
+    </form>
+  </div>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = document.getElementById('password').value;
+      const errorEl = document.getElementById('error');
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        if (res.ok) {
+          window.location.href = '/';
+        } else {
+          errorEl.style.display = 'block';
+        }
+      } catch {
+        errorEl.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

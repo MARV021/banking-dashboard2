@@ -220,6 +220,11 @@ async function connectTrueLayer() {
   }
 }
 
+async function logout() {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.href = '/login';
+}
+
 async function disconnect(id) {
   if (!confirm('Disconnect this bank account?')) return;
   await fetch(`/api/connections/${id}`, { method: 'DELETE' });

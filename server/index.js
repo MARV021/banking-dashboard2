@@ -15,13 +15,43 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
 app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-secret',
   resave: false,
   saveUninitialized: false,
   cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
 }));
+
+// ── Shared-password login gate ────────────────────────────────────────────────
+// One password for everyone with access (colleagues viewing the same company
+// accounts) — not per-user accounts, since there's only one set of connected
+// banks to view, not one per person.
+const PUBLIC_PATHS = new Set(['/login', '/api/login', '/auth/callback']);
+
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/login.html'));
+});
+
+app.post('/api/login', (req, res) => {
+  const { password } = req.body;
+  if (password && password === process.env.DASHBOARD_PASSWORD) {
+    req.session.authenticated = true;
+    return res.json({ ok: true });
+  }
+  res.status(401).json({ error: 'Incorrect password' });
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
+
+app.use((req, res, next) => {
+  if (PUBLIC_PATHS.has(req.path) || req.session.authenticated) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not logged in' });
+  res.redirect('/login');
+});
+
+app.use(express.static(path.join(__dirname, '../public')));
 
 // ── Step 1: frontend requests a link token to open Plaid Link ────────────────
 app.post('/api/create-link-token', async (req, res) => {
