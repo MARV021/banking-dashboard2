@@ -2,13 +2,12 @@ services:
   - type: web
     name: banking-dashboard
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: npm start
-    disk:
-      name: banking-dashboard-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
+    # No persistent disk on the free plan — data/ resets on every restart or
+    # redeploy (login accounts + connected banks). Switch back to `starter`
+    # and re-add the `disk:` block above once you want that to persist.
     envVars:
       - key: NODE_ENV
         value: production
