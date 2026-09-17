@@ -9,9 +9,15 @@ const { v4: uuidv4 } = require('uuid');
 const plaid = require('./plaid');
 const truelayer = require('./truelayer');
 const store = require('./store');
+const users = require('./users');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Behind a reverse proxy (Render, Fly, etc.) this makes req.secure and
+// req.ip reflect the real client, so the Secure cookie flag and rate
+// limiting below work correctly once deployed.
+app.set('trust proxy', 1);
 
 app.use(cors());
 app.use(express.json());
@@ -19,26 +25,53 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 24 * 60 * 60 * 1000,
+  }
 }));
 
-// ── Shared-password login gate ────────────────────────────────────────────────
-// One password for everyone with access (colleagues viewing the same company
-// accounts) — not per-user accounts, since there's only one set of connected
-// banks to view, not one per person.
+// ── Per-user login gate ───────────────────────────────────────────────────────
+// Each colleague has their own account (see server/users.js), managed via
+// `node scripts/manage-users.js add <email> <password>` — not open signup,
+// since only people you've explicitly added should see the connected banks.
 const PUBLIC_PATHS = new Set(['/login', '/api/login', '/auth/callback']);
+
+// Brute-force guard, keyed by IP + email together so one bad actor can't lock
+// a real colleague out just by hammering their address with wrong passwords.
+const loginAttempts = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 10;
+
+function loginRateLimit(req, res, next) {
+  const key = `${req.ip}:${(req.body?.email || '').toLowerCase()}`;
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || now - entry.first > LOGIN_WINDOW_MS) {
+    loginAttempts.set(key, { count: 1, first: now });
+    return next();
+  }
+  entry.count += 1;
+  if (entry.count > LOGIN_MAX_ATTEMPTS) {
+    return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+  }
+  next();
+}
 
 app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/login.html'));
 });
 
-app.post('/api/login', (req, res) => {
-  const { password } = req.body;
-  if (password && password === process.env.DASHBOARD_PASSWORD) {
+app.post('/api/login', loginRateLimit, (req, res) => {
+  const { email, password } = req.body;
+  if (email && password && users.verify(email, password)) {
+    loginAttempts.delete(`${req.ip}:${email.toLowerCase()}`);
     req.session.authenticated = true;
+    req.session.userEmail = email.toLowerCase().trim();
     return res.json({ ok: true });
   }
-  res.status(401).json({ error: 'Incorrect password' });
+  res.status(401).json({ error: 'Incorrect email or password' });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -88,6 +121,14 @@ app.post('/api/exchange-token', async (req, res) => {
     console.error('exchange-token error:', err.response?.data || err.message);
     res.status(500).json({ error: 'Failed to connect bank' });
   }
+});
+
+// ── Plaid: OAuth redirect landing page ────────────────────────────────────────
+// UK Open Banking institutions (Coutts included) send the user back here after
+// they authenticate on the bank's own site. The client-side JS in dashboard.js
+// detects the oauth_state_id query param and resumes the same Plaid Link flow.
+app.get('/plaid/oauth-callback', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
 // ── TrueLayer: sandbox Open Banking redirect flow ────────────────────────────

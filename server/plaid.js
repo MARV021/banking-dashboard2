@@ -15,7 +15,7 @@ function client() {
 }
 
 async function createLinkToken() {
-  const { data } = await client().post('/link/token/create', {
+  const payload = {
     client_id: CLIENT_ID,
     secret: SECRET,
     client_name: 'Business Banking Dashboard',
@@ -23,7 +23,16 @@ async function createLinkToken() {
     language: 'en',
     user: { client_user_id: 'business-user' },
     products: ['transactions'],
-  });
+  };
+
+  // UK banks on Open Banking (Coutts, NatWest, RBS, and most GB institutions)
+  // only support Plaid Link's OAuth flow, which requires a redirect_uri that
+  // is pre-registered in the Plaid Dashboard under Team Settings > API.
+  if (process.env.PLAID_REDIRECT_URI) {
+    payload.redirect_uri = process.env.PLAID_REDIRECT_URI;
+  }
+
+  const { data } = await client().post('/link/token/create', payload);
   return data.link_token;
 }
 

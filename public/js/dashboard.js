@@ -7,8 +7,10 @@ let allData = [];
 // ── Boot ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
   handleUrlParams();
-  refresh();
-  refreshTimer = setInterval(refresh, REFRESH_MS);
+  if (!resumePlaidOAuthIfNeeded()) {
+    refresh();
+    refreshTimer = setInterval(refresh, REFRESH_MS);
+  }
 });
 
 function handleUrlParams() {
@@ -18,6 +20,34 @@ function handleUrlParams() {
   if (p.get('connected') || p.get('error')) {
     history.replaceState(null, '', '/');
   }
+}
+
+// ── Plaid OAuth resume ───────────────────────────────────────────────────────
+// After a UK Open Banking login (e.g. Coutts), Plaid redirects the browser
+// back to PLAID_REDIRECT_URI with an oauth_state_id query param. Link must be
+// re-opened with the *same* link_token used before the redirect, plus the
+// full return URL, to complete the connection.
+function resumePlaidOAuthIfNeeded() {
+  const p = new URLSearchParams(location.search);
+  if (!p.get('oauth_state_id')) return false;
+
+  const linkToken = sessionStorage.getItem('plaid_link_token');
+  if (!linkToken) {
+    showNotif('Bank connection expired — please try connecting again.', 'error');
+    history.replaceState(null, '', '/');
+    return false;
+  }
+
+  const handler = Plaid.create({
+    token: linkToken,
+    receivedRedirectUri: window.location.href,
+    onSuccess: onPlaidSuccess,
+    onExit: onPlaidExit,
+  });
+  handler.open();
+  sessionStorage.removeItem('plaid_link_token');
+  history.replaceState(null, '', '/');
+  return true;
 }
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
@@ -182,26 +212,35 @@ function buildTxnRow(t, currency) {
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
+async function onPlaidSuccess(public_token, metadata) {
+  await fetch('/api/exchange-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ public_token, metadata }),
+  });
+  showNotif('Bank connected successfully!', 'success');
+  refresh();
+  if (!refreshTimer) refreshTimer = setInterval(refresh, REFRESH_MS);
+}
+
+function onPlaidExit(err) {
+  if (err) showNotif('Connection cancelled', 'error');
+}
+
 async function connectBank() {
   try {
     const res = await fetch('/api/create-link-token', { method: 'POST' });
     const { link_token, error } = await res.json();
     if (error) { showNotif('Error: ' + error, 'error'); return; }
 
+    // Needed to resume the flow after a UK Open Banking (e.g. Coutts) OAuth
+    // redirect, since Link must be reopened with this exact same token.
+    sessionStorage.setItem('plaid_link_token', link_token);
+
     const handler = Plaid.create({
       token: link_token,
-      onSuccess: async (public_token, metadata) => {
-        await fetch('/api/exchange-token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ public_token, metadata }),
-        });
-        showNotif('Bank connected successfully!', 'success');
-        refresh();
-      },
-      onExit: (err) => {
-        if (err) showNotif('Connection cancelled', 'error');
-      },
+      onSuccess: onPlaidSuccess,
+      onExit: onPlaidExit,
     });
     handler.open();
   } catch (err) {

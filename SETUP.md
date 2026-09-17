@@ -22,7 +22,18 @@ Edit `.env`:
 PLAID_CLIENT_ID=your_actual_client_id
 PLAID_SECRET=your_sandbox_secret
 PLAID_ENV=sandbox
+PLAID_REDIRECT_URI=https://localhost:3000/plaid/oauth-callback
 ```
+
+**Coutts (and most UK banks) need one extra step.** Coutts is on the UK Open
+Banking network, which Plaid Link only supports via its OAuth redirect flow —
+the non-OAuth flow used by US banks won't work for it. To enable that:
+
+1. In the Plaid Dashboard, go to **Team Settings → API → Allowed redirect URIs**
+2. Add `https://localhost:3000/plaid/oauth-callback` exactly (must match `PLAID_REDIRECT_URI` above, protocol and path included)
+3. For a real Production connection, also add your production URL there once you have one
+
+Without this, connecting Coutts through Plaid Link will fail or get stuck after you log in on Coutts' site.
 
 ---
 
@@ -46,14 +57,43 @@ Open https://localhost:3000 (accept the local dev certificate warning once).
    - Password: `pass_good`
 3. You're redirected back and your live feed appears
 
+Note: Sandbox only has fake test institutions, not the real Coutts — it's for
+testing the flow, not real Coutts data. To connect your actual Coutts account
+you need Production access (next section).
+
 ---
 
 ## Going to production (real accounts, real cost)
 
 1. Apply for Production access in the Plaid dashboard
 2. Swap in your **Production** secret and set `PLAID_ENV=production`
-3. Replace the in-memory store (`server/store.js`) with a real database — access tokens are sensitive and must be **encrypted at rest**
-4. Use HTTPS with a real certificate, not the local `mkcert` cert
+3. ✅ Done — `server/store.js` now encrypts tokens/transactions at rest (`server/crypto.js`), and `server/users.js` replaces the old shared password with per-colleague logins (`node scripts/manage-users.js add <email> <password>`)
+4. Use HTTPS with a real certificate, not the local `mkcert` cert — handled automatically once deployed (see below)
+
+---
+
+## Deploying publicly (Render)
+
+Everything above runs on your own Mac only. To make it reachable from the internet:
+
+1. **Sign up at [render.com](https://render.com)** yourself — I can't create this account for you, and it needs your own GitHub OAuth approval to connect the repo.
+2. Push this repo to GitHub if it isn't already (it is — `MARV021/banking-dashboard2`).
+3. In Render: **New → Blueprint**, point it at this repo. It'll read [render.yaml](render.yaml), which is already set up with:
+   - A **persistent Disk** mounted at the `data/` path — without this, Render's filesystem resets on every restart/deploy and you'd lose all connected banks and user accounts. This requires the **Starter** plan (~$7/month), not the free tier.
+   - Every env var this app needs, pre-listed so Render prompts you for each one instead of you hunting through `.env`.
+4. When Render prompts for the env vars marked "generate on deploy," use **fresh** values — don't reuse anything from `.env` or from any chat history:
+   ```bash
+   openssl rand -hex 32   # run twice: once for SESSION_SECRET, once for ENCRYPTION_KEY
+   ```
+5. Set `APP_URL` and `PLAID_REDIRECT_URI` to your real Render URL, e.g. `https://banking-dashboard.onrender.com` and `https://banking-dashboard.onrender.com/plaid/oauth-callback`.
+6. Register that exact redirect URI in the Plaid dashboard (**Team Settings → API → Allowed redirect URIs**) — separately for Sandbox and, later, Production.
+7. Once deployed, open Render's **Shell** tab for the service and run:
+   ```bash
+   node scripts/manage-users.js add ohudson@marv.com "a-new-real-password"
+   node scripts/manage-users.js add finance@marv.com "a-different-new-password"
+   ```
+   (Don't reuse the two passwords from earlier in this conversation for the live, public version — generate new ones directly in that shell.)
+8. Visit your Render URL, log in, and test connecting a bank the same way as locally.
 
 ### Pricing (pay-as-you-go, per Vendr's reported figures — Plaid doesn't publish a public rate card)
 
