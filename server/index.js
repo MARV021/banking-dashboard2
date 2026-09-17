@@ -14,14 +14,19 @@ const users = require('./users');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Optional: seed/reset one login account from env vars at boot. Useful on
+// Optional: seed/reset login accounts from env vars at boot. Useful on
 // hosts (e.g. Render's free tier) with no persistent disk and no shell
 // access, where you can't run scripts/manage-users.js directly. Set
-// SEED_ADMIN_EMAIL + SEED_ADMIN_PASSWORD in the host's env var UI, restart
-// once, then remove/change SEED_ADMIN_PASSWORD so it isn't sitting live.
-if (process.env.SEED_ADMIN_EMAIL && process.env.SEED_ADMIN_PASSWORD) {
-  users.addUser(process.env.SEED_ADMIN_EMAIL, process.env.SEED_ADMIN_PASSWORD);
-  console.log(`Seeded login account for ${process.env.SEED_ADMIN_EMAIL} from env vars`);
+// SEED_ADMIN_EMAIL + SEED_ADMIN_PASSWORD (and _2, _3, ... for more accounts)
+// in the host's env var UI, restart once, then remove/change the password
+// vars so they aren't sitting live.
+for (const suffix of ['', '_2', '_3', '_4', '_5']) {
+  const email = process.env[`SEED_ADMIN_EMAIL${suffix}`];
+  const password = process.env[`SEED_ADMIN_PASSWORD${suffix}`];
+  if (email && password) {
+    users.addUser(email, password);
+    console.log(`Seeded login account for ${email} from env vars`);
+  }
 }
 
 // Behind a reverse proxy (Render, Fly, etc.) this makes req.secure and
