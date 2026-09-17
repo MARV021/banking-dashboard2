@@ -50,7 +50,7 @@ app.use(session({
 // Each colleague has their own account (see server/users.js), managed via
 // `node scripts/manage-users.js add <email> <password>` — not open signup,
 // since only people you've explicitly added should see the connected banks.
-const PUBLIC_PATHS = new Set(['/login', '/api/login']);
+const PUBLIC_PATHS = new Set(['/login', '/api/login', '/privacy.html', '/terms.html']);
 
 // Brute-force guard, keyed by IP + email together so one bad actor can't lock
 // a real colleague out just by hammering their address with wrong passwords.
