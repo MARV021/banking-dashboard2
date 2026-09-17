@@ -52,15 +52,6 @@ module.exports = {
   count() {
     return connections.size;
   },
-  updateTokens(id, { accessToken, refreshToken, expiresAt }) {
-    const conn = connections.get(id);
-    if (conn) {
-      conn.accessToken  = accessToken;
-      conn.refreshToken = refreshToken;
-      conn.expiresAt    = expiresAt;
-      persist();
-    }
-  },
   updateTransactions(id, { cursor, transactions }) {
     const conn = connections.get(id);
     if (conn) {

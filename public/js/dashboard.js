@@ -248,17 +248,6 @@ async function connectBank() {
   }
 }
 
-async function connectTrueLayer() {
-  try {
-    const res = await fetch('/api/connect-url');
-    const { url, error } = await res.json();
-    if (error) { showNotif('Error: ' + error, 'error'); return; }
-    window.location.href = url;
-  } catch (err) {
-    showNotif('Failed to open bank connection', 'error');
-  }
-}
-
 async function logout() {
   await fetch('/api/logout', { method: 'POST' });
   window.location.href = '/login';

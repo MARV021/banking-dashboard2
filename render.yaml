@@ -25,13 +25,5 @@ services:
         value: sandbox
       - key: PLAID_REDIRECT_URI
         sync: false
-      - key: TRUELAYER_CLIENT_ID
-        sync: false
-      - key: TRUELAYER_CLIENT_SECRET
-        sync: false
-      - key: TRUELAYER_AUTH_URL
-        value: https://auth.truelayer-sandbox.com
-      - key: TRUELAYER_API_URL
-        value: https://api.truelayer-sandbox.com
       - key: APP_URL
         sync: false

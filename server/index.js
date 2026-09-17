@@ -7,7 +7,6 @@ const cors = require('cors');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const plaid = require('./plaid');
-const truelayer = require('./truelayer');
 const store = require('./store');
 const users = require('./users');
 
@@ -51,7 +50,7 @@ app.use(session({
 // Each colleague has their own account (see server/users.js), managed via
 // `node scripts/manage-users.js add <email> <password>` — not open signup,
 // since only people you've explicitly added should see the connected banks.
-const PUBLIC_PATHS = new Set(['/login', '/api/login', '/auth/callback']);
+const PUBLIC_PATHS = new Set(['/login', '/api/login']);
 
 // Brute-force guard, keyed by IP + email together so one bad actor can't lock
 // a real colleague out just by hammering their address with wrong passwords.
@@ -146,36 +145,6 @@ app.get('/plaid/oauth-callback', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-// ── TrueLayer: sandbox Open Banking redirect flow ────────────────────────────
-app.get('/api/connect-url', (req, res) => {
-  res.json({ url: truelayer.getAuthUrl() });
-});
-
-app.get('/auth/callback', async (req, res) => {
-  const { code, error } = req.query;
-  if (error) return res.redirect(`/?error=${encodeURIComponent(error)}`);
-
-  try {
-    const tokens = await truelayer.exchangeCode(code);
-    const info   = await truelayer.getInfo(tokens.access_token);
-
-    store.saveConnection({
-      id: uuidv4(),
-      label: info?.full_name || 'Bank',
-      provider: 'TrueLayer',
-      accessToken:  tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiresAt:    Date.now() + tokens.expires_in * 1000,
-      connectedAt: Date.now(),
-    });
-
-    res.redirect('/?connected=true');
-  } catch (err) {
-    console.error('auth/callback error:', err.response?.data || err.message);
-    res.redirect('/?error=Failed to connect bank');
-  }
-});
-
 // ── List connections ──────────────────────────────────────────────────────────
 app.get('/api/connections', (req, res) => {
   const connections = store.getAll().map(c => ({
@@ -223,46 +192,6 @@ async function loadPlaidConnection(conn) {
   return { accounts: enriched, cards: [] };
 }
 
-async function loadTrueLayerConnection(conn) {
-  const token = await truelayer.ensureFreshToken(conn);
-
-  const [accountList, cardList] = await Promise.all([
-    truelayer.getAccounts(token),
-    truelayer.getCards(token),
-  ]);
-
-  const accounts = await Promise.all(accountList.map(async (acct) => {
-    const [balance, transactions] = await Promise.all([
-      truelayer.getBalance(token, acct.account_id),
-      truelayer.getTransactions(token, acct.account_id),
-    ]);
-    return {
-      account_id: acct.account_id,
-      display_name: acct.display_name,
-      account_type: acct.account_type,
-      account_number: acct.account_number,
-      balance,
-      transactions: transactions.slice(0, 20),
-    };
-  }));
-
-  const cards = await Promise.all(cardList.map(async (card) => {
-    const [balance, transactions] = await Promise.all([
-      truelayer.getCardBalance(token, card.account_id),
-      truelayer.getCardTransactions(token, card.account_id),
-    ]);
-    return {
-      account_id: card.account_id,
-      display_name: card.display_name,
-      card_type: card.card_type,
-      balance,
-      transactions: transactions.slice(0, 20),
-    };
-  }));
-
-  return { accounts, cards };
-}
-
 // ── Live data: accounts + transactions for all connections ────────────────────
 app.get('/api/data', async (req, res) => {
   const connections = store.getAll();
@@ -270,9 +199,7 @@ app.get('/api/data', async (req, res) => {
 
   const results = await Promise.allSettled(
     connections.map(async (conn) => {
-      const { accounts, cards } = conn.provider === 'TrueLayer'
-        ? await loadTrueLayerConnection(conn)
-        : await loadPlaidConnection(conn);
+      const { accounts, cards } = await loadPlaidConnection(conn);
 
       return {
         connectionId: conn.id,
