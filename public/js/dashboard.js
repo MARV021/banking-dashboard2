@@ -3,6 +3,27 @@ const REFRESH_MS = 30_000;
 
 let refreshTimer = null;
 let allData = [];
+let txnBankFilter = 'all';
+
+// ── Collapsed bank cards (persisted per-browser) ───────────────────────────────
+function loadCollapsed() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem('collapsedBanks') || '[]'));
+  } catch {
+    return new Set();
+  }
+}
+function saveCollapsed(set) {
+  try { localStorage.setItem('collapsedBanks', JSON.stringify([...set])); } catch {}
+}
+let collapsedBanks = loadCollapsed();
+
+function toggleBankCollapse(id) {
+  if (collapsedBanks.has(id)) collapsedBanks.delete(id);
+  else collapsedBanks.add(id);
+  saveCollapsed(collapsedBanks);
+  document.querySelector(`[data-connection-id="${id}"]`)?.classList.toggle('collapsed');
+}
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
@@ -70,14 +91,18 @@ function render(data) {
   const empty  = document.getElementById('emptyState');
   const feeds  = document.getElementById('feeds');
 
+  const txnSection = document.getElementById('txnFeedSection');
+
   if (!data.length) {
     empty.style.display = 'flex';
     feeds.innerHTML = '';
+    txnSection.style.display = 'none';
     updateSummary([], 0, 0, 0);
     return;
   }
 
   empty.style.display = 'none';
+  txnSection.style.display = 'block';
 
   // Summary totals
   let totalBalance = 0, totalAccounts = 0, totalTxns = 0;
@@ -108,6 +133,44 @@ function render(data) {
       feeds.insertAdjacentHTML('beforeend', html);
     }
   });
+
+  renderUnifiedTransactions(data);
+}
+
+// ── Unified transaction feed ────────────────────────────────────────────────────
+function renderUnifiedTransactions(data) {
+  const filterEl = document.getElementById('txnBankFilter');
+  const listEl   = document.getElementById('txnFeedList');
+
+  // Rebuild the filter's options, keeping the current selection if still valid
+  const options = ['<option value="all">All banks</option>']
+    .concat(data.map(bank => `<option value="${bank.connectionId}">${esc(bank.label)}</option>`));
+  filterEl.innerHTML = options.join('');
+  filterEl.value = data.some(b => b.connectionId === txnBankFilter) ? txnBankFilter : 'all';
+
+  const all = [];
+  data.forEach(bank => {
+    if (txnBankFilter !== 'all' && bank.connectionId !== txnBankFilter) return;
+    [...bank.accounts, ...bank.cards].forEach(acct => {
+      const currency = acct.balance?.currency || acct.currency || 'GBP';
+      (acct.transactions || []).forEach(t => {
+        all.push({ ...t, bankLabel: bank.label, accountName: acct.display_name, currency });
+      });
+    });
+  });
+  all.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  if (!all.length) {
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px 0">No transactions yet</div>';
+    return;
+  }
+
+  listEl.innerHTML = all.slice(0, 50).map(t => buildTxnRow(t, t.currency, true)).join('');
+}
+
+function onTxnBankFilterChange(value) {
+  txnBankFilter = value;
+  renderUnifiedTransactions(allData);
 }
 
 function updateSummary(balance, banks, accounts, txns) {
@@ -122,11 +185,21 @@ function buildBankCard(bank) {
   const items = [...bank.accounts, ...bank.cards];
   const initial = (bank.label || bank.provider || 'B')[0].toUpperCase();
   const color = stringToColor(bank.connectionId);
+  const collapsed = collapsedBanks.has(bank.connectionId);
+
+  let bankTotal = 0, currency = 'GBP';
+  items.forEach(acct => {
+    const bal = acct.balance?.available ?? acct.balance?.current
+      ?? acct.balance?.total_available ?? acct.balance?.total_current;
+    if (bal != null) bankTotal += bal;
+    currency = acct.balance?.currency || acct.currency || currency;
+  });
 
   return `
-  <div class="bank-card" data-connection-id="${bank.connectionId}">
-    <div class="bank-card-header">
+  <div class="bank-card${collapsed ? ' collapsed' : ''}" data-connection-id="${bank.connectionId}">
+    <div class="bank-card-header" onclick="if (!event.target.closest('button')) toggleBankCollapse('${bank.connectionId}')">
       <div class="bank-card-title">
+        <span class="collapse-arrow">&#9656;</span>
         <div class="bank-avatar" style="background:${color}">${initial}</div>
         <div>
           <div>${esc(bank.label)}</div>
@@ -134,6 +207,7 @@ function buildBankCard(bank) {
         </div>
       </div>
       <div class="bank-actions">
+        <span class="bank-total">${fmt(bankTotal, currency)}</span>
         <span class="fetching-badge" title="Last updated ${new Date(bank.fetchedAt).toLocaleTimeString()}">
           Updated ${timeAgo(bank.fetchedAt)}
         </span>
@@ -149,7 +223,6 @@ function buildBankCard(bank) {
 function buildAccountPanel(acct) {
   const isCard = acct.card_type != null;
   const balance = acct.balance;
-  const txns = acct.transactions || [];
 
   const current   = balance?.current   ?? balance?.total_current ?? null;
   const available = balance?.available ?? balance?.total_available ?? null;
@@ -178,23 +251,18 @@ function buildAccountPanel(acct) {
         ? `<div class="balance-available">Available: ${fmt(available, currency)}</div>`
         : ''}
     </div>
-
-    ${txns.length ? `
-    <div class="txn-heading">Recent Transactions</div>
-    <div class="txn-list">
-      ${txns.slice(0, 6).map(t => buildTxnRow(t, currency)).join('')}
-    </div>
-    ${txns.length > 6 ? `<div class="show-more" onclick="this.parentElement.querySelector('.txn-list').innerHTML = ${JSON.stringify(txns.map(t => buildTxnRow(t, currency)).join(''))};this.remove()">Show all ${txns.length} transactions</div>` : ''}
-    ` : '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px 0">No recent transactions</div>'}
   </div>`;
 }
 
-function buildTxnRow(t, currency) {
+function buildTxnRow(t, currency, showBank = false) {
   const amount  = t.amount ?? 0;
   const isCredit = amount > 0 || t.transaction_type === 'CREDIT';
   const desc    = t.description || t.merchant?.name || 'Transaction';
   const date    = t.timestamp ? new Date(t.timestamp).toLocaleDateString('en-GB', { day:'numeric', month:'short' }) : '';
   const icon    = txnIcon(t.transaction_classification?.[0] || t.transaction_category || '');
+  const sub     = showBank && t.bankLabel
+    ? `${date} &middot; ${esc(t.bankLabel)}${t.accountName ? ' &middot; ' + esc(t.accountName) : ''}`
+    : date;
 
   return `
   <div class="txn-row">
@@ -202,7 +270,7 @@ function buildTxnRow(t, currency) {
       <div class="txn-icon">${icon}</div>
       <div>
         <div class="txn-desc" title="${esc(desc)}">${esc(desc)}</div>
-        <div class="txn-date">${date}</div>
+        <div class="txn-date">${sub}</div>
       </div>
     </div>
     <div class="txn-amount ${isCredit ? 'credit' : 'debit'}">

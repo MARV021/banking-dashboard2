@@ -63,6 +63,17 @@
 
     <!-- Bank feeds -->
     <div id="feeds"></div>
+
+    <!-- Unified transaction feed across all connected banks -->
+    <section class="txn-feed-section" id="txnFeedSection" style="display:none">
+      <div class="txn-feed-header">
+        <h2>All Transactions</h2>
+        <select id="txnBankFilter" class="bank-filter" onchange="onTxnBankFilterChange(this.value)">
+          <option value="all">All banks</option>
+        </select>
+      </div>
+      <div class="txn-list" id="txnFeedList"></div>
+    </section>
   </main>
 
   <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
