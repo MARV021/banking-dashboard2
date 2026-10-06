@@ -211,9 +211,14 @@ function buildBankCard(bank) {
         <span class="fetching-badge" title="Last updated ${new Date(bank.fetchedAt).toLocaleTimeString()}">
           Updated ${timeAgo(bank.fetchedAt)}
         </span>
+        ${bank.provider === 'Enable Banking'
+          ? `<button class="btn-danger" onclick="refreshBank('${bank.connectionId}')">Refresh</button>`
+          : ''}
         <button class="btn-danger" onclick="disconnect('${bank.connectionId}')">Disconnect</button>
       </div>
     </div>
+    ${bank.error ? `<div class="bank-error">${esc(bank.error)}</div>` : ''}
+    ${bank.validUntil ? `<div class="bank-consent">Bank access valid until ${new Date(bank.validUntil).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>` : ''}
     <div class="accounts-grid">
       ${items.map(acct => buildAccountPanel(acct)).join('')}
     </div>
@@ -314,6 +319,52 @@ async function connectBank() {
   } catch (err) {
     showNotif('Failed to open bank connection', 'error');
   }
+}
+
+// ── Enable Banking (direct UK Open Banking) ───────────────────────────────────
+async function openEnableDialog() {
+  const sel = document.getElementById('enableBank');
+  if (!sel.options.length) {
+    try {
+      const res = await fetch('/api/enable/banks');
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'Could not load banks');
+      sel.innerHTML = body.banks.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
+      const coutts = body.banks.find(b => /coutts/i.test(b));
+      if (coutts) sel.value = coutts;
+    } catch (err) {
+      showNotif(err.message, 'error');
+      return;
+    }
+  }
+  document.getElementById('enableDialog').showModal();
+}
+
+async function startEnableConnect() {
+  const btn = document.getElementById('enableGo');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/enable/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bankName: document.getElementById('enableBank').value,
+        psuType: document.getElementById('enablePsu').value,
+      }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'Could not start the connection');
+    window.location.href = body.url;
+  } catch (err) {
+    btn.disabled = false;
+    document.getElementById('enableDialog').close();
+    showNotif(err.message, 'error');
+  }
+}
+
+async function refreshBank(id) {
+  await fetch(`/api/connections/${id}/refresh`, { method: 'POST' });
+  refresh();
 }
 
 async function logout() {

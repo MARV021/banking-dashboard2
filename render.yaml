@@ -27,3 +27,7 @@ services:
         sync: false
       - key: APP_URL
         sync: false
+      - key: ENABLE_APP_ID
+        sync: false
+      - key: ENABLE_PRIVATE_KEY
+        sync: false

@@ -22,6 +22,7 @@
           <span class="pulse"></span> Live
         </div>
         <span class="last-updated" id="lastUpdated">Fetching…</span>
+        <button class="btn-primary" onclick="openEnableDialog()">+ Connect UK Bank</button>
         <button class="btn-primary" onclick="connectBank()">+ Connect Bank (Plaid)</button>
         <button class="btn-danger" onclick="logout()">Log out</button>
       </div>
@@ -57,9 +58,28 @@
       <div class="empty-icon">🏦</div>
       <h2>No banks connected yet</h2>
       <p>Connect your business bank accounts to see live balances and transactions across all of them in one place.</p>
+      <button class="btn-primary btn-large" onclick="openEnableDialog()">Connect a UK bank</button>
       <button class="btn-primary btn-large" onclick="connectBank()">Connect via Plaid</button>
-      <p class="powered">Powered by <strong>Plaid</strong></p>
+      <p class="powered">Powered by <strong>Enable Banking</strong> &amp; <strong>Plaid</strong></p>
     </div>
+
+    <dialog id="enableDialog" class="dialog">
+      <h3>Connect a UK bank</h3>
+      <p class="dialog-note">You'll be sent to the bank to approve read-only access, then returned here.</p>
+      <label class="dialog-label">Bank
+        <select id="enableBank" class="bank-filter"></select>
+      </label>
+      <label class="dialog-label">Account type
+        <select id="enablePsu" class="bank-filter">
+          <option value="personal">Personal</option>
+          <option value="business">Business</option>
+        </select>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="btn-danger" onclick="document.getElementById('enableDialog').close()">Cancel</button>
+        <button type="button" class="btn-primary" id="enableGo" onclick="startEnableConnect()">Continue to bank</button>
+      </div>
+    </dialog>
 
     <!-- Bank feeds -->
     <div id="feeds"></div>

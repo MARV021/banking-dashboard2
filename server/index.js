@@ -7,6 +7,7 @@ const cors = require('cors');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const plaid = require('./plaid');
+const enable = require('./enablebanking');
 const store = require('./store');
 const users = require('./users');
 
@@ -145,6 +146,100 @@ app.get('/plaid/oauth-callback', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
+// ── Enable Banking: direct UK Open Banking connections ────────────────────────
+function enableRedirectUrl() {
+  return process.env.ENABLE_REDIRECT_URL
+    || `${process.env.APP_URL || `http://localhost:${PORT}`}/enable/callback`;
+}
+
+app.get('/api/enable/banks', async (req, res) => {
+  if (!enable.isConfigured()) {
+    return res.status(501).json({ error: 'Enable Banking is not configured on the server' });
+  }
+  try {
+    const banks = await enable.getBanks('GB');
+    res.json({ banks: banks.map(b => b.name).sort() });
+  } catch (err) {
+    console.error('enable banks error:', err.response?.data || err.message);
+    res.status(502).json({ error: 'Could not load the bank list' });
+  }
+});
+
+app.post('/api/enable/start', async (req, res) => {
+  if (!enable.isConfigured()) {
+    return res.status(501).json({ error: 'Enable Banking is not configured on the server' });
+  }
+  const { bankName, psuType } = req.body;
+  if (!bankName || !['personal', 'business'].includes(psuType)) {
+    return res.status(400).json({ error: 'Choose a bank and account type' });
+  }
+  try {
+    const state = uuidv4();
+    const url = await enable.startAuth({ bankName, psuType, state, redirectUrl: enableRedirectUrl() });
+    req.session.enableAuth = { state, bankName, psuType };
+    res.json({ url });
+  } catch (err) {
+    console.error('enable start error:', err.response?.data || err.message);
+    res.status(502).json({ error: 'Could not start the bank connection' });
+  }
+});
+
+// The bank sends the user back here; `state` must match what we stored for
+// this browser session before the one-time code is exchanged.
+app.get('/enable/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const pending = req.session.enableAuth;
+  delete req.session.enableAuth;
+
+  if (error) return res.redirect(`/?error=${encodeURIComponent(String(error))}`);
+  if (!pending || !code || state !== pending.state) {
+    return res.redirect('/?error=Bank connection expired, please try again');
+  }
+
+  try {
+    const session = await enable.createSession(code);
+    store.saveConnection({
+      id: uuidv4(),
+      label: pending.psuType === 'business' ? `${pending.bankName} (Business)` : pending.bankName,
+      provider: 'Enable Banking',
+      sessionId: session.session_id,
+      validUntil: session.access?.valid_until || null,
+      accounts: (session.accounts || []).map(a => ({
+        uid: a.uid,
+        iban: a.account_id?.iban,
+        other: a.account_id?.other?.identification,
+        name: a.name,
+        details: a.details,
+        currency: a.currency,
+      })),
+      connectedAt: Date.now(),
+    });
+    res.redirect('/?connected=true');
+  } catch (err) {
+    console.error('enable callback error:', err.response?.data || err.message);
+    res.redirect('/?error=Failed to connect bank');
+  }
+});
+
+// Banks only allow a few unattended reads per account per day, so Enable
+// Banking data is cached and refreshed manually or after the cache expires.
+const enableCache = new Map();
+const ENABLE_CACHE_MS = (Number(process.env.ENABLE_CACHE_MINUTES) || 360) * 60_000;
+
+async function loadEnableConnection(conn) {
+  const hit = enableCache.get(conn.id);
+  if (hit && Date.now() - hit.at < ENABLE_CACHE_MS) return hit;
+  const data = await enable.loadConnection(conn);
+  const entry = { ...data, at: Date.now() };
+  enableCache.set(conn.id, entry);
+  return entry;
+}
+
+app.post('/api/connections/:id/refresh', (req, res) => {
+  enableCache.delete(req.params.id);
+  res.json({ ok: true });
+});
+
 // ── List connections ──────────────────────────────────────────────────────────
 app.get('/api/connections', (req, res) => {
   const connections = store.getAll().map(c => ({
@@ -157,7 +252,12 @@ app.get('/api/connections', (req, res) => {
 });
 
 // ── Disconnect a bank ─────────────────────────────────────────────────────────
-app.delete('/api/connections/:id', (req, res) => {
+app.delete('/api/connections/:id', async (req, res) => {
+  const conn = store.get(req.params.id);
+  if (conn?.provider === 'Enable Banking' && conn.sessionId) {
+    await enable.deleteSession(conn.sessionId);
+  }
+  enableCache.delete(req.params.id);
   store.remove(req.params.id);
   res.json({ ok: true });
 });
@@ -197,22 +297,32 @@ app.get('/api/data', async (req, res) => {
   const connections = store.getAll();
   if (!connections.length) return res.json([]);
 
-  const results = await Promise.allSettled(
+  const results = await Promise.all(
     connections.map(async (conn) => {
-      const { accounts, cards } = await loadPlaidConnection(conn);
-
-      return {
+      const base = {
         connectionId: conn.id,
         label: conn.label,
         provider: conn.provider,
-        accounts,
-        cards,
-        fetchedAt: Date.now(),
+        validUntil: conn.validUntil || null,
       };
+      try {
+        if (conn.provider === 'Enable Banking') {
+          const { accounts, cards, at } = await loadEnableConnection(conn);
+          return { ...base, accounts, cards, fetchedAt: at };
+        }
+        const { accounts, cards } = await loadPlaidConnection(conn);
+        return { ...base, accounts, cards, fetchedAt: Date.now() };
+      } catch (err) {
+        console.error(`load ${conn.provider} connection failed:`, err.response?.data || err.message);
+        const reason = err.response?.status === 401 || err.response?.status === 403
+          ? 'Bank access has expired or been revoked — disconnect and reconnect it.'
+          : 'Could not load this bank right now.';
+        return { ...base, accounts: [], cards: [], fetchedAt: Date.now(), error: reason };
+      }
     })
   );
 
-  res.json(results.filter(r => r.status === 'fulfilled').map(r => r.value));
+  res.json(results);
 });
 
 const certPath = path.join(__dirname, '../certs/localhost.pem');
