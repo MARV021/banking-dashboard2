@@ -330,14 +330,7 @@ body {
   background: rgba(239,68,68,.12);
   border-bottom: 1px solid var(--border);
 }
-.bank-consent {
-  padding: 6px 20px;
-  font-size: 11px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
-}
-.bank-card.collapsed .bank-error,
-.bank-card.collapsed .bank-consent { display: none; }
+.bank-card.collapsed .bank-error { display: none; }
 
 /* ── Connect-bank dialog ──────────────────────────────── */
 .dialog {
