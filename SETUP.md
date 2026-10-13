@@ -133,9 +133,11 @@ This app only uses the **Transactions** and **Balance** products (via `/accounts
 ```bash
 node scripts/manage-users.js add <email> <password> [admin|viewer]   # new users default to viewer
 node scripts/manage-users.js role <email> <admin|viewer>
-node scripts/manage-users.js reset-2fa <email>   # lost phone: they set up 2FA again at next login
+node scripts/manage-users.js reset-2fa <email>   # asks for a fresh 2FA setup at next login
 node scripts/manage-users.js remove <email>
 node scripts/manage-users.js list
 ```
+
+Each person's 2FA QR code is derived from their email, password and `ENCRYPTION_KEY`, so it stays the same across restarts (Render's free plan wipes `data/` on every restart) and their authenticator entry keeps working. **Lost phone:** give them a new password (`SEED_ADMIN_PASSWORD…` on Render, or `manage-users.js add`), which issues a new QR code and makes the old one useless. Changing `ENCRYPTION_KEY` issues everyone a new QR code.
 
 Accounts created before roles existed are treated as admins. Removing a user or changing their role takes effect immediately, even if they're logged in.

@@ -27,4 +27,4 @@ function decrypt(blob) {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
 }
 
-module.exports = { encrypt, decrypt };
+module.exports = { encrypt, decrypt, key };

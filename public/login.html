@@ -54,6 +54,8 @@
     .qr { display: block; margin: 0 auto 12px; border-radius: 8px; background: #fff; padding: 6px; width: 200px; height: 200px; }
     .key { font-family: monospace; font-size: 12px; color: #f1f5f9; background: #22263a; border-radius: 6px; padding: 8px; text-align: center; word-break: break-all; margin-bottom: 14px; user-select: all; }
     ol { color: #94a3b8; font-size: 13px; margin: 0 0 14px 18px; line-height: 1.6; }
+    .hint { font-size: 12px; margin-bottom: 12px; }
+    .hint strong { color: #f1f5f9; font-weight: 600; }
     .link-btn { background: none; color: #94a3b8; font-weight: 400; font-size: 12px; margin-top: 10px; padding: 4px; }
     .link-btn:hover { background: none; color: #f1f5f9; }
   </style>
@@ -85,6 +87,7 @@
         <li>Type the 6-digit code it shows</li>
       </ol>
       <img id="qr" class="qr" alt="QR code for your authenticator app" />
+      <p class="hint">Already have <strong>MARV Banking Dashboard</strong> in your app? No need to scan again, just type its current code.</p>
       <div class="key" id="setupKey"></div>
       <input type="text" id="setupCode" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" required />
       <button type="submit">Turn on two-step login</button>

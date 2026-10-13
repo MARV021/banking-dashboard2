@@ -11,6 +11,7 @@ const store = require('./store');
 const users = require('./users');
 const totp = require('./totp');
 const audit = require('./audit');
+const { key: serverKey } = require('./crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -173,7 +174,7 @@ app.post('/api/login', loginRateLimit, async (req, res, next) => {
     await regenerateSession(req);
     req.session.pending = user.totpEnabled
       ? { email: user.email, at: Date.now() }
-      : { email: user.email, at: Date.now(), setup: true, secret: totp.generateSecret() };
+      : { email: user.email, at: Date.now(), setup: true, secret: totp.deriveSecret(serverKey(), user.email, password) };
     res.json({ next: user.totpEnabled ? '2fa' : 'setup-2fa' });
   } catch (err) { next(err); }
 });

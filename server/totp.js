@@ -7,13 +7,28 @@ const STEP_SECONDS = 30;
 const DIGITS = 6;
 const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
-function generateSecret() {
-  const bytes = crypto.randomBytes(20);
+function base32Encode(bytes) {
   let bits = '';
   for (const b of bytes) bits += b.toString(2).padStart(8, '0');
   let out = '';
   for (let i = 0; i + 5 <= bits.length; i += 5) out += BASE32[parseInt(bits.slice(i, i + 5), 2)];
   return out;
+}
+
+function generateSecret() {
+  return base32Encode(crypto.randomBytes(20));
+}
+
+// Same inputs always give the same secret. Render's free plan wipes data/ on
+// every restart, which would otherwise mean scanning a new QR code each time;
+// deriving the secret instead means the existing authenticator entry keeps
+// working. Including the password means changing it issues a new QR code
+// (e.g. after a lost phone).
+function deriveSecret(serverKey, email, password) {
+  const mac = crypto.createHmac('sha256', serverKey)
+    .update(`totp\0${String(email).toLowerCase().trim()}\0${password}`)
+    .digest();
+  return base32Encode(mac.subarray(0, 20));
 }
 
 function base32Decode(secret) {
@@ -55,4 +70,4 @@ function otpauthUrl(secret, email, issuer = 'MARV Banking Dashboard') {
   return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SECONDS}`;
 }
 
-module.exports = { generateSecret, verify, otpauthUrl, _internal: { codeAt } };
+module.exports = { generateSecret, deriveSecret, verify, otpauthUrl, _internal: { codeAt } };
