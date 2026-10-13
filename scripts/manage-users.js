@@ -16,7 +16,7 @@ function usage() {
   console.log('Usage:');
   console.log('  node scripts/manage-users.js add <email> <password> [admin|viewer]   (new users default to viewer)');
   console.log('  node scripts/manage-users.js role <email> <admin|viewer>');
-  console.log('  node scripts/manage-users.js reset-2fa <email>   (user sets up 2FA again at next login)');
+  console.log('  node scripts/manage-users.js reset-2fa <email>   (user re-enters a code at next login; change their password to issue a new QR code)');
   console.log('  node scripts/manage-users.js remove <email>');
   console.log('  node scripts/manage-users.js list');
   process.exit(1);
@@ -34,7 +34,7 @@ try {
   } else if (cmd === 'reset-2fa' && email) {
     if (!users.resetTotp(email)) { console.log(`No such user: ${email}`); process.exit(1); }
     audit.log('user_2fa_reset', { ...by, target: email.toLowerCase() });
-    console.log(`2FA reset for ${email}. They'll be asked to set it up again at next login.`);
+    console.log(`2FA reset for ${email}. Their QR code only changes if their password changes, so for a lost phone also run: add ${email} <new password>`);
   } else if (cmd === 'remove' && email) {
     const existed = users.removeUser(email);
     if (existed) audit.log('user_removed', { ...by, target: email.toLowerCase() });
