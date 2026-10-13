@@ -427,3 +427,12 @@ body:not(.role-viewer) .viewer-only { display: none !important; }
   .bank-card-header { flex-wrap: wrap; gap: 10px; }
   .bank-actions { flex-wrap: wrap; }
 }
+
+/* ── Business / personal sections ─────────────────────── */
+.feed-group { margin-bottom: 8px; }
+.group-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 4px 2px 12px; }
+.group-header h2 { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+.group-total { font-size: 15px; font-weight: 700; }
+.category-select { padding: 4px 8px; }
+.category-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.category-choices .btn-primary { padding: 14px; font-size: 14px; }

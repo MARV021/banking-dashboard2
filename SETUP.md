@@ -127,6 +127,7 @@ This app only uses the **Transactions** and **Balance** products (via `/accounts
 | Search & filters | Filter transactions by text, bank, money in/out and date range |
 | CSV export | Downloads whatever the filters currently show |
 | Monthly summary | Money in, money out and net per month |
+| Business / personal | Each bank sits in a Business or Personal section (asked when connecting, changeable by admins from the bank card); transactions, the monthly summary and CSV export can be filtered by section |
 
 ### Managing users
 

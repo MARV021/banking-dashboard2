@@ -263,6 +263,11 @@ app.post('/api/audit/export', (req, res) => {
   res.json({ ok: true });
 });
 
+// Each connected bank sits in one section of the dashboard. Banks connected
+// before sections existed count as business.
+const CATEGORIES = ['business', 'personal'];
+const categoryOf = conn => (CATEGORIES.includes(conn.category) ? conn.category : 'business');
+
 // ── Step 1: frontend requests a link token to open Plaid Link ────────────────
 app.post('/api/create-link-token', requireAdmin, async (req, res) => {
   try {
@@ -277,6 +282,7 @@ app.post('/api/create-link-token', requireAdmin, async (req, res) => {
 // ── Step 2: frontend sends back the public token after bank login ─────────────
 app.post('/api/exchange-token', requireAdmin, async (req, res) => {
   const { public_token, metadata } = req.body;
+  const category = CATEGORIES.includes(req.body.category) ? req.body.category : 'business';
   try {
     const { accessToken, itemId } = await plaid.exchangePublicToken(public_token);
     const item        = await plaid.getItem(accessToken);
@@ -286,6 +292,7 @@ app.post('/api/exchange-token', requireAdmin, async (req, res) => {
     store.saveConnection({
       id: crypto.randomUUID(),
       label,
+      category,
       provider: institution?.name || 'Plaid',
       accessToken,
       itemId,
@@ -293,7 +300,7 @@ app.post('/api/exchange-token', requireAdmin, async (req, res) => {
       transactions: [],
       connectedAt: Date.now(),
     });
-    audit.log('bank_connected', { email: req.user.email, ip: req.ip, bank: label, provider: 'Plaid' });
+    audit.log('bank_connected', { email: req.user.email, ip: req.ip, bank: label, provider: 'Plaid', category });
 
     res.json({ ok: true });
   } catch (err) {
@@ -315,10 +322,22 @@ app.get('/api/connections', (req, res) => {
   const connections = store.getAll().map(c => ({
     id: c.id,
     label: c.label,
+    category: categoryOf(c),
     provider: c.provider,
     connectedAt: c.connectedAt,
   }));
   res.json(connections);
+});
+
+// ── Move a bank between the business and personal sections ──────────────────
+app.patch('/api/connections/:id', requireAdmin, (req, res) => {
+  const conn = store.get(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+  const { category } = req.body || {};
+  if (!CATEGORIES.includes(category)) return res.status(400).json({ error: 'Category must be business or personal' });
+  store.update(conn.id, { category });
+  audit.log('bank_moved', { email: req.user.email, ip: req.ip, bank: conn.label, category });
+  res.json({ ok: true });
 });
 
 // ── Disconnect a bank ─────────────────────────────────────────────────────────
@@ -369,6 +388,7 @@ app.get('/api/data', async (req, res) => {
       const base = {
         connectionId: conn.id,
         label: conn.label,
+        category: categoryOf(conn),
         provider: conn.provider,
       };
       try {
