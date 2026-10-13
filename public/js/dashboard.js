@@ -6,6 +6,9 @@ const TXN_PAGE = 50;
 let refreshTimer = null;
 let allData = [];
 let txnBankFilter = 'all';
+let txnCategory = 'all';
+
+const CATEGORIES = ['business', 'personal'];
 let txnLimit = TXN_PAGE;
 
 // ── Collapsed bank cards (persisted per-browser) ───────────────────────────────
@@ -107,12 +110,16 @@ async function refresh() {
 function render(data) {
   const empty  = document.getElementById('emptyState');
   const feeds  = document.getElementById('feeds');
+  const groupCards = cat => document.querySelector(`#group-${cat} .group-cards`);
 
   const txnSection = document.getElementById('txnFeedSection');
 
   if (!data.length) {
     empty.style.display = 'flex';
-    feeds.innerHTML = '';
+    CATEGORIES.forEach(cat => {
+      groupCards(cat).innerHTML = '';
+      document.getElementById(`group-${cat}`).style.display = 'none';
+    });
     txnSection.style.display = 'none';
     updateSummary([], 0, 0, 0);
     return;
@@ -143,15 +150,34 @@ function render(data) {
 
   data.forEach(bank => {
     const existing = feeds.querySelector(`[data-connection-id="${bank.connectionId}"]`);
+    const container = groupCards(bank.category);
     const html = buildBankCard(bank);
-    if (existing) {
+    if (existing && existing.parentElement === container) {
       existing.outerHTML = html;
     } else {
-      feeds.insertAdjacentHTML('beforeend', html);
+      existing?.remove();
+      container.insertAdjacentHTML('beforeend', html);
     }
   });
 
+  CATEGORIES.forEach(cat => {
+    const banks = data.filter(b => b.category === cat);
+    document.getElementById(`group-${cat}`).style.display = banks.length ? 'block' : 'none';
+    // Only show a section total when its accounts share one currency
+    const currencies = new Set(banks.flatMap(b => [...b.accounts, ...b.cards].map(a => a.balance?.currency || a.currency || 'GBP')));
+    document.getElementById(`total-${cat}`).textContent = currencies.size === 1
+      ? fmt(banks.reduce((sum, b) => sum + bankBalance(b), 0), [...currencies][0])
+      : '';
+  });
+
   renderUnifiedTransactions(data);
+}
+
+function bankBalance(bank) {
+  return [...bank.accounts, ...bank.cards].reduce((sum, acct) => {
+    const bal = acct.balance?.available ?? acct.balance?.current;
+    return bal != null ? sum + bal : sum;
+  }, 0);
 }
 
 // ── Unified transaction feed ────────────────────────────────────────────────────
@@ -164,6 +190,7 @@ function allTransactions(data) {
         all.push({
           ...t,
           connectionId: bank.connectionId,
+          category: bank.category,
           bankLabel: bank.label,
           accountName: acct.display_name,
           currency,
@@ -187,7 +214,7 @@ function txnFilters() {
 function filteredTransactions(data) {
   const { q, direction, from, to } = txnFilters();
   return allTransactions(data).filter(t => {
-    if (txnBankFilter !== 'all' && t.connectionId !== txnBankFilter) return false;
+    if (!inSelectedBanks(t)) return false;
     if (direction === 'in' && !(t.amount > 0)) return false;
     if (direction === 'out' && !(t.amount < 0)) return false;
     const day = (t.timestamp || '').slice(0, 10);
@@ -201,16 +228,26 @@ function filteredTransactions(data) {
   });
 }
 
+// Business/personal and bank filters, shared by the transaction list, the
+// monthly summary and the CSV export.
+function inSelectedBanks(t) {
+  if (txnCategory !== 'all' && t.category !== txnCategory) return false;
+  if (txnBankFilter !== 'all' && t.connectionId !== txnBankFilter) return false;
+  return true;
+}
+
 function renderUnifiedTransactions(data) {
   const filterEl = document.getElementById('txnBankFilter');
   const listEl   = document.getElementById('txnFeedList');
   const moreEl   = document.getElementById('txnShowMore');
 
-  // Rebuild the filter's options, keeping the current selection if still valid
+  // Rebuild the bank filter for the chosen section, keeping the current
+  // selection if it's still valid
+  const banks = data.filter(b => txnCategory === 'all' || b.category === txnCategory);
   const options = ['<option value="all">All banks</option>']
-    .concat(data.map(bank => `<option value="${bank.connectionId}">${esc(bank.label)}</option>`));
+    .concat(banks.map(bank => `<option value="${bank.connectionId}">${esc(bank.label)}</option>`));
   filterEl.innerHTML = options.join('');
-  if (!data.some(b => b.connectionId === txnBankFilter)) txnBankFilter = 'all';
+  if (!banks.some(b => b.connectionId === txnBankFilter)) txnBankFilter = 'all';
   filterEl.value = txnBankFilter;
 
   renderMonthlySummary(data);
@@ -230,6 +267,7 @@ function renderUnifiedTransactions(data) {
 }
 
 function onTxnFilterChange() {
+  txnCategory = document.getElementById('txnCategory').value;
   txnBankFilter = document.getElementById('txnBankFilter').value;
   txnLimit = TXN_PAGE;
   renderUnifiedTransactions(allData);
@@ -238,6 +276,7 @@ function onTxnFilterChange() {
 function clearTxnFilters() {
   ['txnSearch', 'txnFrom', 'txnTo'].forEach(id => { document.getElementById(id).value = ''; });
   document.getElementById('txnDirection').value = 'all';
+  document.getElementById('txnCategory').value = 'all';
   document.getElementById('txnBankFilter').value = 'all';
   onTxnFilterChange();
 }
@@ -254,7 +293,7 @@ function showMoreTxns() {
 function renderMonthlySummary(data) {
   const section = document.getElementById('monthSection');
   const txns = allTransactions(data)
-    .filter(t => t.timestamp && (txnBankFilter === 'all' || t.connectionId === txnBankFilter));
+    .filter(t => t.timestamp && inSelectedBanks(t));
 
   const perCurrency = new Map();
   txns.forEach(t => perCurrency.set(t.currency, (perCurrency.get(t.currency) || 0) + 1));
@@ -306,12 +345,13 @@ function exportCsv() {
   const list = filteredTransactions(allData);
   if (!list.length) { showNotif('No transactions to export', 'error'); return; }
 
-  const header = ['Date', 'Description', 'Amount', 'Currency', 'Bank', 'Account'];
+  const header = ['Date', 'Description', 'Amount', 'Currency', 'Section', 'Bank', 'Account'];
   const lines = [header.join(',')].concat(list.map(t => [
     csvCell((t.timestamp || '').slice(0, 10)),
     csvCell(t.description),
     (t.amount ?? 0).toFixed(2),
     csvCell(t.currency),
+    csvCell(t.category === 'personal' ? 'Personal' : 'Business'),
     csvCell(t.bankLabel),
     csvCell(t.accountName),
   ].join(',')));
@@ -341,6 +381,7 @@ const ACTIVITY_LABELS = {
   logout: 'Logged out',
   bank_connected: 'Connected a bank',
   bank_disconnected: 'Disconnected a bank',
+  bank_moved: 'Moved a bank between sections',
   transactions_exported: 'Exported transactions',
   user_added: 'User added or password reset',
   user_role_changed: 'User role changed',
@@ -363,6 +404,7 @@ async function openActivity() {
       const details = [
         e.email,
         e.bank && `${e.bank}${e.provider ? ` (${e.provider})` : ''}`,
+        e.category && (e.category === 'personal' ? 'Personal' : 'Business'),
         e.target && `user ${e.target}`,
         e.role && `role ${e.role}`,
         e.rows != null && `${e.rows} rows`,
@@ -406,7 +448,7 @@ function buildBankCard(bank) {
 
   return `
   <div class="bank-card${collapsed ? ' collapsed' : ''}" data-connection-id="${bank.connectionId}">
-    <div class="bank-card-header" onclick="if (!event.target.closest('button')) toggleBankCollapse('${bank.connectionId}')">
+    <div class="bank-card-header" onclick="if (!event.target.closest('button, select')) toggleBankCollapse('${bank.connectionId}')">
       <div class="bank-card-title">
         <span class="collapse-arrow">&#9656;</span>
         <div class="bank-avatar" style="background:${color}">${initial}</div>
@@ -420,6 +462,9 @@ function buildBankCard(bank) {
         <span class="fetching-badge" title="Last updated ${new Date(bank.fetchedAt).toLocaleTimeString()}">
           Updated ${timeAgo(bank.fetchedAt)}
         </span>
+        <select class="bank-filter category-select admin-only" title="Section" onchange="setCategory('${bank.connectionId}', this.value)">
+          ${CATEGORIES.map(c => `<option value="${c}"${bank.category === c ? ' selected' : ''}>${c === 'business' ? 'Business' : 'Personal'}</option>`).join('')}
+        </select>
         <button class="btn-danger admin-only" onclick="disconnect('${bank.connectionId}')">Disconnect</button>
       </div>
     </div>
@@ -491,10 +536,12 @@ function buildTxnRow(t, currency, showBank = false) {
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 async function onPlaidSuccess(public_token, metadata) {
+  const category = sessionStorage.getItem('plaid_category') || 'business';
+  sessionStorage.removeItem('plaid_category');
   await fetch('/api/exchange-token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ public_token, metadata }),
+    body: JSON.stringify({ public_token, metadata, category }),
   });
   showNotif('Bank connected successfully!', 'success');
   refresh();
@@ -505,7 +552,16 @@ function onPlaidExit(err) {
   if (err) showNotif('Connection cancelled', 'error');
 }
 
-async function connectBank() {
+// Ask which section the bank belongs in before opening Plaid Link.
+function connectBank() {
+  document.getElementById('categoryDialog').showModal();
+}
+
+async function startConnect(category) {
+  document.getElementById('categoryDialog').close();
+  // sessionStorage (not a variable) so the choice survives a UK bank's OAuth
+  // redirect, after which the page reloads and resumes Link.
+  sessionStorage.setItem('plaid_category', category);
   try {
     const res = await fetch('/api/create-link-token', { method: 'POST' });
     const { link_token, error } = await res.json();
@@ -529,6 +585,19 @@ async function connectBank() {
 async function logout() {
   await fetch('/api/logout', { method: 'POST' });
   window.location.href = '/login';
+}
+
+async function setCategory(id, category) {
+  const res = await fetch(`/api/connections/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    showNotif(body.error || 'Could not move this bank', 'error');
+  }
+  refresh();
 }
 
 async function disconnect(id) {

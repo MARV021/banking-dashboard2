@@ -52,6 +52,13 @@ module.exports = {
   count() {
     return connections.size;
   },
+  update(id, fields) {
+    const conn = connections.get(id);
+    if (!conn) return false;
+    Object.assign(conn, fields);
+    persist();
+    return true;
+  },
   updateTransactions(id, { cursor, transactions }) {
     const conn = connections.get(id);
     if (conn) {

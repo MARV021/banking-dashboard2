@@ -73,8 +73,29 @@
       </div>
     </dialog>
 
-    <!-- Bank feeds -->
-    <div id="feeds"></div>
+    <dialog id="categoryDialog" class="dialog">
+      <h3>Business or personal?</h3>
+      <p class="dialog-note">Choose which section this bank appears in. You can change it later.</p>
+      <div class="category-choices">
+        <button type="button" class="btn-primary" onclick="startConnect('business')">Business</button>
+        <button type="button" class="btn-primary" onclick="startConnect('personal')">Personal</button>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn-danger" onclick="document.getElementById('categoryDialog').close()">Cancel</button>
+      </div>
+    </dialog>
+
+    <!-- Bank feeds, split into business and personal sections -->
+    <div id="feeds">
+      <section class="feed-group" id="group-business" style="display:none">
+        <div class="group-header"><h2>Business</h2><span class="group-total" id="total-business"></span></div>
+        <div class="group-cards"></div>
+      </section>
+      <section class="feed-group" id="group-personal" style="display:none">
+        <div class="group-header"><h2>Personal</h2><span class="group-total" id="total-personal"></span></div>
+        <div class="group-cards"></div>
+      </section>
+    </div>
 
     <!-- Money in / out per month, following the bank filter below -->
     <section class="month-section" id="monthSection" style="display:none">
@@ -93,6 +114,11 @@
       </div>
       <div class="txn-tools">
         <input type="search" id="txnSearch" class="bank-filter txn-search" placeholder="Search description, bank or account" oninput="onTxnFilterChange()" />
+        <select id="txnCategory" class="bank-filter" onchange="onTxnFilterChange()">
+          <option value="all">Business &amp; personal</option>
+          <option value="business">Business</option>
+          <option value="personal">Personal</option>
+        </select>
         <select id="txnBankFilter" class="bank-filter" onchange="onTxnFilterChange()">
           <option value="all">All banks</option>
         </select>
