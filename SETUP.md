@@ -89,8 +89,8 @@ Everything above runs on your own Mac only. To make it reachable from the intern
 6. Register that exact redirect URI in the Plaid dashboard (**Team Settings → API → Allowed redirect URIs**) — separately for Sandbox and, later, Production.
 7. Once deployed, open Render's **Shell** tab for the service and run:
    ```bash
-   node scripts/manage-users.js add ohudson@marv.com "a-new-real-password"
-   node scripts/manage-users.js add finance@marv.com "a-different-new-password"
+   node scripts/manage-users.js add ohudson@marv.com "a-new-real-password" admin
+   node scripts/manage-users.js add finance@marv.com "a-different-new-password" viewer
    ```
    (Don't reuse the two passwords from earlier in this conversation for the live, public version — generate new ones directly in that shell.)
 8. Visit your Render URL, log in, and test connecting a bank the same way as locally.
@@ -120,4 +120,22 @@ This app only uses the **Transactions** and **Balance** products (via `/accounts
 | Multiple banks | Connect unlimited accounts — each gets its own card |
 | Live refresh | Balances + transactions update every 30 seconds |
 | Incremental sync | Uses `/transactions/sync` (cursor-based), not a full re-fetch every poll |
-| Disconnect | Remove any bank in one click |
+| Disconnect | Remove any bank in one click (admins only) |
+| Two-step login | Everyone needs a 6-digit code from an authenticator app; first login walks them through setup |
+| Roles | `admin` can connect/disconnect banks and see the activity log; `viewer` can only see balances and transactions |
+| Activity log | Logins, failed logins, bank connections and CSV exports, viewable by admins (**Activity** button) and stored in `data/audit.log` |
+| Search & filters | Filter transactions by text, bank, money in/out and date range |
+| CSV export | Downloads whatever the filters currently show |
+| Monthly summary | Money in, money out and net per month |
+
+### Managing users
+
+```bash
+node scripts/manage-users.js add <email> <password> [admin|viewer]   # new users default to viewer
+node scripts/manage-users.js role <email> <admin|viewer>
+node scripts/manage-users.js reset-2fa <email>   # lost phone: they set up 2FA again at next login
+node scripts/manage-users.js remove <email>
+node scripts/manage-users.js list
+```
+
+Accounts created before roles existed are treated as admins. Removing a user or changing their role takes effect immediately, even if they're logged in.

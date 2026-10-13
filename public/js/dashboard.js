@@ -1,9 +1,12 @@
 // Live refresh interval in milliseconds
 const REFRESH_MS = 30_000;
 
+const TXN_PAGE = 50;
+
 let refreshTimer = null;
 let allData = [];
 let txnBankFilter = 'all';
+let txnLimit = TXN_PAGE;
 
 // ── Collapsed bank cards (persisted per-browser) ───────────────────────────────
 function loadCollapsed() {
@@ -27,12 +30,26 @@ function toggleBankCollapse(id) {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
+  loadMe();
   handleUrlParams();
   if (!resumePlaidOAuthIfNeeded()) {
     refresh();
     refreshTimer = setInterval(refresh, REFRESH_MS);
   }
 });
+
+// Admins can connect/disconnect banks and see the activity log; viewers only
+// see data. The server enforces this too, this just hides the buttons.
+async function loadMe() {
+  try {
+    const res = await fetch('/api/me');
+    if (!res.ok) return;
+    const me = await res.json();
+    document.body.classList.remove('role-unknown');
+    document.body.classList.add(`role-${me.role}`);
+    document.getElementById('userBadge').innerHTML = `${esc(me.email)}<span class="role">${esc(me.role)}</span>`;
+  } catch {}
+}
 
 function handleUrlParams() {
   const p = new URLSearchParams(location.search);
@@ -138,39 +155,231 @@ function render(data) {
 }
 
 // ── Unified transaction feed ────────────────────────────────────────────────────
+function allTransactions(data) {
+  const all = [];
+  data.forEach(bank => {
+    [...bank.accounts, ...bank.cards].forEach(acct => {
+      const currency = acct.balance?.currency || acct.currency || 'GBP';
+      (acct.transactions || []).forEach(t => {
+        all.push({
+          ...t,
+          connectionId: bank.connectionId,
+          bankLabel: bank.label,
+          accountName: acct.display_name,
+          currency,
+        });
+      });
+    });
+  });
+  all.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  return all;
+}
+
+function txnFilters() {
+  return {
+    q: document.getElementById('txnSearch').value.trim().toLowerCase(),
+    direction: document.getElementById('txnDirection').value,
+    from: document.getElementById('txnFrom').value,
+    to: document.getElementById('txnTo').value,
+  };
+}
+
+function filteredTransactions(data) {
+  const { q, direction, from, to } = txnFilters();
+  return allTransactions(data).filter(t => {
+    if (txnBankFilter !== 'all' && t.connectionId !== txnBankFilter) return false;
+    if (direction === 'in' && !(t.amount > 0)) return false;
+    if (direction === 'out' && !(t.amount < 0)) return false;
+    const day = (t.timestamp || '').slice(0, 10);
+    if (from && (!day || day < from)) return false;
+    if (to && (!day || day > to)) return false;
+    if (q) {
+      const haystack = `${t.description || ''} ${t.bankLabel || ''} ${t.accountName || ''}`.toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
 function renderUnifiedTransactions(data) {
   const filterEl = document.getElementById('txnBankFilter');
   const listEl   = document.getElementById('txnFeedList');
+  const moreEl   = document.getElementById('txnShowMore');
 
   // Rebuild the filter's options, keeping the current selection if still valid
   const options = ['<option value="all">All banks</option>']
     .concat(data.map(bank => `<option value="${bank.connectionId}">${esc(bank.label)}</option>`));
   filterEl.innerHTML = options.join('');
-  filterEl.value = data.some(b => b.connectionId === txnBankFilter) ? txnBankFilter : 'all';
+  if (!data.some(b => b.connectionId === txnBankFilter)) txnBankFilter = 'all';
+  filterEl.value = txnBankFilter;
 
-  const all = [];
-  data.forEach(bank => {
-    if (txnBankFilter !== 'all' && bank.connectionId !== txnBankFilter) return;
-    [...bank.accounts, ...bank.cards].forEach(acct => {
-      const currency = acct.balance?.currency || acct.currency || 'GBP';
-      (acct.transactions || []).forEach(t => {
-        all.push({ ...t, bankLabel: bank.label, accountName: acct.display_name, currency });
-      });
-    });
-  });
-  all.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  renderMonthlySummary(data);
 
-  if (!all.length) {
-    listEl.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px 0">No transactions yet</div>';
+  const list = filteredTransactions(data);
+  document.getElementById('txnCount').textContent = list.length ? `(${list.length})` : '';
+
+  if (!list.length) {
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px 0">No matching transactions</div>';
+    moreEl.style.display = 'none';
     return;
   }
 
-  listEl.innerHTML = all.slice(0, 50).map(t => buildTxnRow(t, t.currency, true)).join('');
+  listEl.innerHTML = list.slice(0, txnLimit).map(t => buildTxnRow(t, t.currency, true)).join('');
+  moreEl.style.display = list.length > txnLimit ? 'block' : 'none';
+  moreEl.textContent = `Show more (${list.length - txnLimit} left)`;
 }
 
-function onTxnBankFilterChange(value) {
-  txnBankFilter = value;
+function onTxnFilterChange() {
+  txnBankFilter = document.getElementById('txnBankFilter').value;
+  txnLimit = TXN_PAGE;
   renderUnifiedTransactions(allData);
+}
+
+function clearTxnFilters() {
+  ['txnSearch', 'txnFrom', 'txnTo'].forEach(id => { document.getElementById(id).value = ''; });
+  document.getElementById('txnDirection').value = 'all';
+  document.getElementById('txnBankFilter').value = 'all';
+  onTxnFilterChange();
+}
+
+function showMoreTxns() {
+  txnLimit += TXN_PAGE;
+  renderUnifiedTransactions(allData);
+}
+
+// ── Monthly summary ────────────────────────────────────────────────────────────
+// Money in / out per calendar month for the selected bank. Only the most
+// common currency is summed, since adding different currencies together would
+// be meaningless.
+function renderMonthlySummary(data) {
+  const section = document.getElementById('monthSection');
+  const txns = allTransactions(data)
+    .filter(t => t.timestamp && (txnBankFilter === 'all' || t.connectionId === txnBankFilter));
+
+  const perCurrency = new Map();
+  txns.forEach(t => perCurrency.set(t.currency, (perCurrency.get(t.currency) || 0) + 1));
+  const currency = [...perCurrency.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'GBP';
+
+  const months = new Map();
+  txns.filter(t => t.currency === currency).forEach(t => {
+    const key = t.timestamp.slice(0, 7);
+    const m = months.get(key) || { in: 0, out: 0 };
+    if (t.amount > 0) m.in += t.amount; else m.out += -t.amount;
+    months.set(key, m);
+  });
+
+  const rows = [...months.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 6);
+  if (!rows.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+
+  const max = Math.max(...rows.map(([, m]) => Math.max(m.in, m.out)), 1);
+  const pct = v => `${Math.max((v / max) * 100, 0.5).toFixed(1)}%`;
+
+  document.getElementById('monthNote').textContent =
+    'Based on transactions loaded from your banks' + (perCurrency.size > 1 ? ` · ${currency} only` : '');
+
+  document.getElementById('monthList').innerHTML = rows.map(([key, m]) => {
+    const label = new Date(`${key}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+    const net = m.in - m.out;
+    return `
+    <div class="month-row">
+      <div class="month-label">${label}</div>
+      <div class="month-bars">
+        <div class="month-bar"><span class="bar in" style="width:${pct(m.in)}"></span>In ${fmt(m.in, currency)}</div>
+        <div class="month-bar"><span class="bar out" style="width:${pct(m.out)}"></span>Out ${fmt(m.out, currency)}</div>
+      </div>
+      <div class="month-net ${net < 0 ? 'negative' : ''}"><span class="month-net-label">Net</span>${net >= 0 ? '+' : ''}${fmt(net, currency)}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── CSV export ─────────────────────────────────────────────────────────────────
+// Exports whatever the filters currently show. Text cells starting with
+// = + - @ are prefixed with ' so Excel doesn't run them as formulas.
+function csvCell(value) {
+  let s = String(value ?? '');
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function exportCsv() {
+  const list = filteredTransactions(allData);
+  if (!list.length) { showNotif('No transactions to export', 'error'); return; }
+
+  const header = ['Date', 'Description', 'Amount', 'Currency', 'Bank', 'Account'];
+  const lines = [header.join(',')].concat(list.map(t => [
+    csvCell((t.timestamp || '').slice(0, 10)),
+    csvCell(t.description),
+    (t.amount ?? 0).toFixed(2),
+    csvCell(t.currency),
+    csvCell(t.bankLabel),
+    csvCell(t.accountName),
+  ].join(',')));
+
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+
+  fetch('/api/audit/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rows: list.length }),
+  }).catch(() => {});
+}
+
+// ── Activity log (admins) ──────────────────────────────────────────────────────
+const ACTIVITY_LABELS = {
+  login_success: 'Logged in',
+  login_failed: 'Failed login',
+  '2fa_failed': 'Wrong 2FA code',
+  '2fa_enrolled': 'Set up two-step login',
+  logout: 'Logged out',
+  bank_connected: 'Connected a bank',
+  bank_disconnected: 'Disconnected a bank',
+  transactions_exported: 'Exported transactions',
+  user_added: 'User added or password reset',
+  user_role_changed: 'User role changed',
+  user_2fa_reset: 'User 2FA reset',
+  user_removed: 'User removed',
+};
+const ACTIVITY_WARN = new Set(['login_failed', '2fa_failed', 'bank_disconnected', 'user_removed']);
+
+async function openActivity() {
+  const listEl = document.getElementById('activityList');
+  listEl.innerHTML = '<div class="activity-detail">Loading…</div>';
+  document.getElementById('activityDialog').showModal();
+  try {
+    const res = await fetch('/api/audit');
+    const entries = await res.json();
+    if (!res.ok) throw new Error(entries.error || 'Could not load activity');
+    if (!entries.length) { listEl.innerHTML = '<div class="activity-detail">No activity recorded yet.</div>'; return; }
+    listEl.innerHTML = entries.map(e => {
+      const when = new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const details = [
+        e.email,
+        e.bank && `${e.bank}${e.provider ? ` (${e.provider})` : ''}`,
+        e.target && `user ${e.target}`,
+        e.role && `role ${e.role}`,
+        e.rows != null && `${e.rows} rows`,
+        e.ip && `IP ${e.ip}`,
+      ].filter(Boolean).map(esc).join(' · ');
+      return `
+      <div class="activity-row">
+        <div class="activity-time">${when}</div>
+        <div>
+          <div class="activity-event ${ACTIVITY_WARN.has(e.event) ? 'warn' : ''}">${esc(ACTIVITY_LABELS[e.event] || e.event)}</div>
+          <div class="activity-detail">${details}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    listEl.innerHTML = `<div class="activity-detail">${esc(err.message)}</div>`;
+  }
 }
 
 function updateSummary(balance, banks, accounts, txns) {
@@ -211,14 +420,10 @@ function buildBankCard(bank) {
         <span class="fetching-badge" title="Last updated ${new Date(bank.fetchedAt).toLocaleTimeString()}">
           Updated ${timeAgo(bank.fetchedAt)}
         </span>
-        ${bank.provider === 'Enable Banking'
-          ? `<button class="btn-danger" onclick="refreshBank('${bank.connectionId}')">Refresh</button>`
-          : ''}
-        <button class="btn-danger" onclick="disconnect('${bank.connectionId}')">Disconnect</button>
+        <button class="btn-danger admin-only" onclick="disconnect('${bank.connectionId}')">Disconnect</button>
       </div>
     </div>
     ${bank.error ? `<div class="bank-error">${esc(bank.error)}</div>` : ''}
-    ${bank.validUntil ? `<div class="bank-consent">Bank access valid until ${new Date(bank.validUntil).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>` : ''}
     <div class="accounts-grid">
       ${items.map(acct => buildAccountPanel(acct)).join('')}
     </div>
@@ -321,52 +526,6 @@ async function connectBank() {
   }
 }
 
-// ── Enable Banking (direct UK Open Banking) ───────────────────────────────────
-async function openEnableDialog() {
-  const sel = document.getElementById('enableBank');
-  if (!sel.options.length) {
-    try {
-      const res = await fetch('/api/enable/banks');
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || 'Could not load banks');
-      sel.innerHTML = body.banks.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
-      const coutts = body.banks.find(b => /coutts/i.test(b));
-      if (coutts) sel.value = coutts;
-    } catch (err) {
-      showNotif(err.message, 'error');
-      return;
-    }
-  }
-  document.getElementById('enableDialog').showModal();
-}
-
-async function startEnableConnect() {
-  const btn = document.getElementById('enableGo');
-  btn.disabled = true;
-  try {
-    const res = await fetch('/api/enable/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        bankName: document.getElementById('enableBank').value,
-        psuType: document.getElementById('enablePsu').value,
-      }),
-    });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error || 'Could not start the connection');
-    window.location.href = body.url;
-  } catch (err) {
-    btn.disabled = false;
-    document.getElementById('enableDialog').close();
-    showNotif(err.message, 'error');
-  }
-}
-
-async function refreshBank(id) {
-  await fetch(`/api/connections/${id}/refresh`, { method: 'POST' });
-  refresh();
-}
-
 async function logout() {
   await fetch('/api/logout', { method: 'POST' });
   window.location.href = '/login';
@@ -374,7 +533,11 @@ async function logout() {
 
 async function disconnect(id) {
   if (!confirm('Disconnect this bank account?')) return;
-  await fetch(`/api/connections/${id}`, { method: 'DELETE' });
+  const res = await fetch(`/api/connections/${id}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    showNotif(body.error || 'Could not disconnect', 'error');
+  }
   refresh();
 }
 

@@ -1,66 +1,121 @@
 require('dotenv').config();
 const fs = require('fs');
 const https = require('https');
+const crypto = require('crypto');
 const express = require('express');
 const session = require('express-session');
-const cors = require('cors');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const QRCode = require('qrcode');
 const plaid = require('./plaid');
-const enable = require('./enablebanking');
 const store = require('./store');
 const users = require('./users');
+const totp = require('./totp');
+const audit = require('./audit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 // Optional: seed/reset login accounts from env vars at boot. Useful on
 // hosts (e.g. Render's free tier) with no persistent disk and no shell
 // access, where you can't run scripts/manage-users.js directly. Set
 // SEED_ADMIN_EMAIL + SEED_ADMIN_PASSWORD (and _2, _3, ... for more accounts)
 // in the host's env var UI, restart once, then remove/change the password
-// vars so they aren't sitting live.
+// vars so they aren't sitting live. Seeded accounts are admins.
 for (const suffix of ['', '_2', '_3', '_4', '_5']) {
   const email = process.env[`SEED_ADMIN_EMAIL${suffix}`];
   const password = process.env[`SEED_ADMIN_PASSWORD${suffix}`];
   if (email && password) {
-    users.addUser(email, password);
+    users.addUser(email, password, 'admin');
     console.log(`Seeded login account for ${email} from env vars`);
   }
+}
+
+// A guessable session secret lets anyone forge a logged-in cookie, so never
+// fall back to a fixed default. In production refuse to start; locally use a
+// random one (which just means logins don't survive a restart).
+let sessionSecret = process.env.SESSION_SECRET;
+if (!sessionSecret || sessionSecret === 'dev-secret' || sessionSecret.startsWith('change-this')) {
+  if (IS_PROD) {
+    console.error('SESSION_SECRET is missing or still the example value. Generate one with `openssl rand -hex 32`.');
+    process.exit(1);
+  }
+  sessionSecret = crypto.randomBytes(32).toString('hex');
+  console.warn('SESSION_SECRET not set, using a random one for this run (logins reset on restart).');
+} else if (sessionSecret.length < 32) {
+  console.warn('SESSION_SECRET is shorter than 32 characters; consider `openssl rand -hex 32`.');
 }
 
 // Behind a reverse proxy (Render, Fly, etc.) this makes req.secure and
 // req.ip reflect the real client, so the Secure cookie flag and rate
 // limiting below work correctly once deployed.
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
-app.use(cors());
+// Standard browser security headers. Plaid Link loads its script and iframe
+// from cdn.plaid.com and talks to the Plaid API; everything else is same-origin.
+// The pages still use inline onclick handlers, hence 'unsafe-inline'.
+app.use((req, res, next) => {
+  res.set({
+    'Content-Security-Policy': [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://cdn.plaid.com",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https://*.plaid.com",
+      "connect-src 'self' https://*.plaid.com",
+      "frame-src https://cdn.plaid.com",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "object-src 'none'",
+    ].join('; '),
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'same-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+  });
+  if (IS_PROD) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+
 app.use(express.json());
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'dev-secret',
+  name: 'sid',
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    secure: IS_PROD,
     sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000,
+    maxAge: 12 * 60 * 60 * 1000,
   }
 }));
 
-// ── Per-user login gate ───────────────────────────────────────────────────────
+// ── Per-user login gate (password + authenticator-app code) ───────────────────
 // Each colleague has their own account (see server/users.js), managed via
-// `node scripts/manage-users.js add <email> <password>` — not open signup,
-// since only people you've explicitly added should see the connected banks.
-const PUBLIC_PATHS = new Set(['/login', '/api/login', '/privacy.html', '/terms.html']);
+// `node scripts/manage-users.js add <email> <password> [admin|viewer]` — not
+// open signup, since only people you've explicitly added should see the
+// connected banks. Everyone must use 2FA: first login walks them through
+// setting it up.
+const PUBLIC_PATHS = new Set([
+  '/login', '/api/login', '/api/2fa/setup', '/api/2fa/verify', '/privacy.html', '/terms.html',
+]);
+
+const norm = email => String(email || '').toLowerCase().trim();
 
 // Brute-force guard, keyed by IP + email together so one bad actor can't lock
 // a real colleague out just by hammering their address with wrong passwords.
+// Covers both the password step and the 2FA code step.
 const loginAttempts = new Map();
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 10;
 
+const attemptKey = req => `${req.ip}:${norm(req.body?.email || req.session?.pending?.email)}`;
+
 function loginRateLimit(req, res, next) {
-  const key = `${req.ip}:${(req.body?.email || '').toLowerCase()}`;
+  const key = attemptKey(req);
   const now = Date.now();
   const entry = loginAttempts.get(key);
   if (!entry || now - entry.first > LOGIN_WINDOW_MS) {
@@ -74,35 +129,141 @@ function loginRateLimit(req, res, next) {
   next();
 }
 
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of loginAttempts) {
+    if (now - entry.first > LOGIN_WINDOW_MS) loginAttempts.delete(key);
+  }
+}, LOGIN_WINDOW_MS).unref();
+
+// New session id at each privilege change, so a session id seen before login
+// can't be reused afterwards (session fixation).
+const regenerateSession = req => new Promise((resolve, reject) => {
+  req.session.regenerate(err => (err ? reject(err) : resolve()));
+});
+
+// Password checked, waiting for the 2FA code. Expires after 5 minutes.
+const PENDING_TTL_MS = 5 * 60 * 1000;
+function pendingLogin(req) {
+  const p = req.session.pending;
+  if (!p || Date.now() - p.at > PENDING_TTL_MS) return null;
+  return p;
+}
+
+async function completeLogin(req, email) {
+  loginAttempts.delete(attemptKey(req));
+  await regenerateSession(req);
+  req.session.authenticated = true;
+  req.session.userEmail = email;
+  audit.log('login_success', { email, ip: req.ip });
+}
+
 app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/login.html'));
 });
 
-app.post('/api/login', loginRateLimit, (req, res) => {
-  const { email, password } = req.body;
-  if (email && password && users.verify(email, password)) {
-    loginAttempts.delete(`${req.ip}:${email.toLowerCase()}`);
-    req.session.authenticated = true;
-    req.session.userEmail = email.toLowerCase().trim();
-    return res.json({ ok: true });
-  }
-  res.status(401).json({ error: 'Incorrect email or password' });
+app.post('/api/login', loginRateLimit, async (req, res, next) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password || !users.verify(email, password)) {
+      audit.log('login_failed', { email: norm(email) || null, ip: req.ip });
+      return res.status(401).json({ error: 'Incorrect email or password' });
+    }
+    const user = users.get(email);
+    await regenerateSession(req);
+    req.session.pending = user.totpEnabled
+      ? { email: user.email, at: Date.now() }
+      : { email: user.email, at: Date.now(), setup: true, secret: totp.generateSecret() };
+    res.json({ next: user.totpEnabled ? '2fa' : 'setup-2fa' });
+  } catch (err) { next(err); }
+});
+
+// First login: show the QR code / key to add to an authenticator app.
+app.get('/api/2fa/setup', async (req, res, next) => {
+  try {
+    const p = pendingLogin(req);
+    if (!p?.setup) return res.status(401).json({ error: 'Login expired, please start again' });
+    const qr = await QRCode.toDataURL(totp.otpauthUrl(p.secret, p.email), { margin: 1, width: 200 });
+    res.json({ secret: p.secret, qr });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/2fa/setup', loginRateLimit, async (req, res, next) => {
+  try {
+    const p = pendingLogin(req);
+    if (!p?.setup) return res.status(401).json({ error: 'Login expired, please start again' });
+    const counter = totp.verify(p.secret, req.body?.code);
+    if (counter == null) {
+      audit.log('2fa_failed', { email: p.email, ip: req.ip, stage: 'setup' });
+      return res.status(401).json({ error: 'That code didn\'t match. Check the time on your phone and try again.' });
+    }
+    users.enableTotp(p.email, p.secret, counter);
+    audit.log('2fa_enrolled', { email: p.email, ip: req.ip });
+    await completeLogin(req, p.email);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/2fa/verify', loginRateLimit, async (req, res, next) => {
+  try {
+    const p = pendingLogin(req);
+    if (!p || p.setup) return res.status(401).json({ error: 'Login expired, please start again' });
+    const secret = users.getTotpSecret(p.email);
+    const counter = secret ? totp.verify(secret, req.body?.code) : null;
+    if (counter == null || !users.consumeTotpCounter(p.email, counter)) {
+      audit.log('2fa_failed', { email: p.email, ip: req.ip });
+      return res.status(401).json({ error: 'Incorrect code' });
+    }
+    await completeLogin(req, p.email);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
 });
 
 app.post('/api/logout', (req, res) => {
+  if (req.session.authenticated) audit.log('logout', { email: req.session.userEmail, ip: req.ip });
   req.session.destroy(() => res.json({ ok: true }));
 });
 
+// Role is looked up on every request (not cached in the session) so removing
+// a user or downgrading them to viewer takes effect immediately.
 app.use((req, res, next) => {
-  if (PUBLIC_PATHS.has(req.path) || req.session.authenticated) return next();
+  if (PUBLIC_PATHS.has(req.path)) return next();
+  const user = req.session.authenticated ? users.get(req.session.userEmail) : null;
+  if (user) {
+    req.user = user;
+    return next();
+  }
+  if (req.session.authenticated) req.session.destroy(() => {});
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not logged in' });
   res.redirect('/login');
 });
 
+// Connecting and disconnecting banks, and viewing the activity log, are
+// admin-only; viewers can see balances and transactions.
+function requireAdmin(req, res, next) {
+  if (req.user?.role === 'admin') return next();
+  res.status(403).json({ error: 'Only admins can do this' });
+}
+
 app.use(express.static(path.join(__dirname, '../public')));
 
+app.get('/api/me', (req, res) => {
+  res.json({ email: req.user.email, role: req.user.role });
+});
+
+app.get('/api/audit', requireAdmin, (req, res) => {
+  res.json(audit.recent(200));
+});
+
+// CSV exports are built in the browser; this just records that one happened.
+app.post('/api/audit/export', (req, res) => {
+  const rows = Number(req.body?.rows) || 0;
+  audit.log('transactions_exported', { email: req.user.email, ip: req.ip, rows });
+  res.json({ ok: true });
+});
+
 // ── Step 1: frontend requests a link token to open Plaid Link ────────────────
-app.post('/api/create-link-token', async (req, res) => {
+app.post('/api/create-link-token', requireAdmin, async (req, res) => {
   try {
     const linkToken = await plaid.createLinkToken();
     res.json({ link_token: linkToken });
@@ -113,16 +274,17 @@ app.post('/api/create-link-token', async (req, res) => {
 });
 
 // ── Step 2: frontend sends back the public token after bank login ─────────────
-app.post('/api/exchange-token', async (req, res) => {
+app.post('/api/exchange-token', requireAdmin, async (req, res) => {
   const { public_token, metadata } = req.body;
   try {
     const { accessToken, itemId } = await plaid.exchangePublicToken(public_token);
     const item        = await plaid.getItem(accessToken);
     const institution  = await plaid.getInstitution(item?.institution_id);
 
+    const label = institution?.name || metadata?.institution?.name || 'Bank';
     store.saveConnection({
-      id: uuidv4(),
-      label: institution?.name || metadata?.institution?.name || 'Bank',
+      id: crypto.randomUUID(),
+      label,
       provider: institution?.name || 'Plaid',
       accessToken,
       itemId,
@@ -130,6 +292,7 @@ app.post('/api/exchange-token', async (req, res) => {
       transactions: [],
       connectedAt: Date.now(),
     });
+    audit.log('bank_connected', { email: req.user.email, ip: req.ip, bank: label, provider: 'Plaid' });
 
     res.json({ ok: true });
   } catch (err) {
@@ -146,100 +309,6 @@ app.get('/plaid/oauth-callback', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-// ── Enable Banking: direct UK Open Banking connections ────────────────────────
-function enableRedirectUrl() {
-  return process.env.ENABLE_REDIRECT_URL
-    || `${process.env.APP_URL || `http://localhost:${PORT}`}/enable/callback`;
-}
-
-app.get('/api/enable/banks', async (req, res) => {
-  if (!enable.isConfigured()) {
-    return res.status(501).json({ error: 'Enable Banking is not configured on the server' });
-  }
-  try {
-    const banks = await enable.getBanks('GB');
-    res.json({ banks: banks.map(b => b.name).sort() });
-  } catch (err) {
-    console.error('enable banks error:', err.response?.data || err.message);
-    res.status(502).json({ error: 'Could not load the bank list' });
-  }
-});
-
-app.post('/api/enable/start', async (req, res) => {
-  if (!enable.isConfigured()) {
-    return res.status(501).json({ error: 'Enable Banking is not configured on the server' });
-  }
-  const { bankName, psuType } = req.body;
-  if (!bankName || !['personal', 'business'].includes(psuType)) {
-    return res.status(400).json({ error: 'Choose a bank and account type' });
-  }
-  try {
-    const state = uuidv4();
-    const url = await enable.startAuth({ bankName, psuType, state, redirectUrl: enableRedirectUrl() });
-    req.session.enableAuth = { state, bankName, psuType };
-    res.json({ url });
-  } catch (err) {
-    console.error('enable start error:', err.response?.data || err.message);
-    res.status(502).json({ error: 'Could not start the bank connection' });
-  }
-});
-
-// The bank sends the user back here; `state` must match what we stored for
-// this browser session before the one-time code is exchanged.
-app.get('/enable/callback', async (req, res) => {
-  const { code, state, error } = req.query;
-  const pending = req.session.enableAuth;
-  delete req.session.enableAuth;
-
-  if (error) return res.redirect(`/?error=${encodeURIComponent(String(error))}`);
-  if (!pending || !code || state !== pending.state) {
-    return res.redirect('/?error=Bank connection expired, please try again');
-  }
-
-  try {
-    const session = await enable.createSession(code);
-    store.saveConnection({
-      id: uuidv4(),
-      label: pending.psuType === 'business' ? `${pending.bankName} (Business)` : pending.bankName,
-      provider: 'Enable Banking',
-      sessionId: session.session_id,
-      validUntil: session.access?.valid_until || null,
-      accounts: (session.accounts || []).map(a => ({
-        uid: a.uid,
-        iban: a.account_id?.iban,
-        other: a.account_id?.other?.identification,
-        name: a.name,
-        details: a.details,
-        currency: a.currency,
-      })),
-      connectedAt: Date.now(),
-    });
-    res.redirect('/?connected=true');
-  } catch (err) {
-    console.error('enable callback error:', err.response?.data || err.message);
-    res.redirect('/?error=Failed to connect bank');
-  }
-});
-
-// Banks only allow a few unattended reads per account per day, so Enable
-// Banking data is cached and refreshed manually or after the cache expires.
-const enableCache = new Map();
-const ENABLE_CACHE_MS = (Number(process.env.ENABLE_CACHE_MINUTES) || 360) * 60_000;
-
-async function loadEnableConnection(conn) {
-  const hit = enableCache.get(conn.id);
-  if (hit && Date.now() - hit.at < ENABLE_CACHE_MS) return hit;
-  const data = await enable.loadConnection(conn);
-  const entry = { ...data, at: Date.now() };
-  enableCache.set(conn.id, entry);
-  return entry;
-}
-
-app.post('/api/connections/:id/refresh', (req, res) => {
-  enableCache.delete(req.params.id);
-  res.json({ ok: true });
-});
-
 // ── List connections ──────────────────────────────────────────────────────────
 app.get('/api/connections', (req, res) => {
   const connections = store.getAll().map(c => ({
@@ -252,13 +321,11 @@ app.get('/api/connections', (req, res) => {
 });
 
 // ── Disconnect a bank ─────────────────────────────────────────────────────────
-app.delete('/api/connections/:id', async (req, res) => {
+app.delete('/api/connections/:id', requireAdmin, async (req, res) => {
   const conn = store.get(req.params.id);
-  if (conn?.provider === 'Enable Banking' && conn.sessionId) {
-    await enable.deleteSession(conn.sessionId);
-  }
-  enableCache.delete(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
   store.remove(req.params.id);
+  audit.log('bank_disconnected', { email: req.user.email, ip: req.ip, bank: conn.label, provider: conn.provider });
   res.json({ ok: true });
 });
 
@@ -280,7 +347,6 @@ async function loadPlaidConnection(conn) {
     },
     transactions: transactions
       .filter(t => t.account_id === acct.account_id)
-      .slice(0, 20)
       .map(t => ({
         description: t.name,
         amount: -t.amount, // Plaid uses positive for money leaving the account
@@ -303,13 +369,8 @@ app.get('/api/data', async (req, res) => {
         connectionId: conn.id,
         label: conn.label,
         provider: conn.provider,
-        validUntil: conn.validUntil || null,
       };
       try {
-        if (conn.provider === 'Enable Banking') {
-          const { accounts, cards, at } = await loadEnableConnection(conn);
-          return { ...base, accounts, cards, fetchedAt: at };
-        }
         const { accounts, cards } = await loadPlaidConnection(conn);
         return { ...base, accounts, cards, fetchedAt: Date.now() };
       } catch (err) {

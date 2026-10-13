@@ -330,14 +330,7 @@ body {
   background: rgba(239,68,68,.12);
   border-bottom: 1px solid var(--border);
 }
-.bank-consent {
-  padding: 6px 20px;
-  font-size: 11px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
-}
-.bank-card.collapsed .bank-error,
-.bank-card.collapsed .bank-consent { display: none; }
+.bank-card.collapsed .bank-error { display: none; }
 
 /* ── Connect-bank dialog ──────────────────────────────── */
 .dialog {
@@ -366,3 +359,71 @@ body {
 }
 @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 .skel-line { height: 12px; margin-bottom: 8px; }
+
+/* ── Roles ────────────────────────────────────────────── */
+body:not(.role-admin) .admin-only { display: none !important; }
+body:not(.role-viewer) .viewer-only { display: none !important; }
+.user-badge { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.user-badge .role { text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: .5px; margin-left: 4px; padding: 2px 6px; border-radius: 4px; background: var(--surface2); }
+
+/* ── Transaction filters ──────────────────────────────── */
+.txn-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+.txn-search { flex: 1 1 220px; min-width: 0; }
+.date-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.date-label input { color-scheme: dark; }
+.txn-count { color: var(--muted); font-weight: 500; font-size: 13px; }
+.txn-desc { max-width: 420px; }
+.txn-left { flex: 1 1 auto; }
+.txn-left > div:last-child { min-width: 0; }
+
+/* ── Monthly summary ──────────────────────────────────── */
+.month-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+.section-note { color: var(--muted); font-size: 11px; }
+.month-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 110px;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.month-row:last-child { border-bottom: none; }
+.month-label { font-weight: 600; font-size: 13px; }
+.month-bars { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.month-bar { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+.month-bar .bar { height: 8px; border-radius: 4px; min-width: 2px; }
+.month-bar .bar.in { background: var(--green); }
+.month-bar .bar.out { background: var(--red); }
+.month-net { text-align: right; font-weight: 700; font-size: 13px; }
+.month-net.negative { color: var(--red); }
+.month-net-label { display: block; color: var(--muted); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .5px; }
+@media (max-width: 600px) { .month-row { grid-template-columns: 60px 1fr 90px; } }
+
+/* ── Activity log ─────────────────────────────────────── */
+.dialog-wide { width: 640px; }
+.activity-list { max-height: 60vh; overflow-y: auto; }
+.activity-row { display: grid; grid-template-columns: 130px 1fr; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.activity-row:last-child { border-bottom: none; }
+.activity-time { color: var(--muted); }
+.activity-event.warn { color: var(--amber); }
+.activity-detail { color: var(--muted); font-size: 11px; margin-top: 2px; word-break: break-word; }
+
+@media (max-width: 900px) {
+  .header-inner { height: auto; padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
+  .header-right { flex-wrap: wrap; gap: 8px; }
+  .main { padding: 16px; }
+}
+.logo, .header-right button, .last-updated { white-space: nowrap; }
+.header-inner { height: auto; min-height: 60px; padding-top: 10px; padding-bottom: 10px; flex-wrap: wrap; gap: 10px; }
+.header-right { flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+@media (max-width: 600px) {
+  .header-right { justify-content: flex-start; }
+  .bank-card-header { flex-wrap: wrap; gap: 10px; }
+  .bank-actions { flex-wrap: wrap; }
+}

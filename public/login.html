@@ -48,17 +48,48 @@
     }
     button:hover { background: #3b82f6; }
     .error { color: #ef4444; font-size: 13px; margin-top: 10px; display: none; }
+    .step { display: none; }
+    .step.active { display: block; }
+    .code-input { font-size: 20px; letter-spacing: 6px; text-align: center; font-variant-numeric: tabular-nums; }
+    .qr { display: block; margin: 0 auto 12px; border-radius: 8px; background: #fff; padding: 6px; width: 200px; height: 200px; }
+    .key { font-family: monospace; font-size: 12px; color: #f1f5f9; background: #22263a; border-radius: 6px; padding: 8px; text-align: center; word-break: break-all; margin-bottom: 14px; user-select: all; }
+    ol { color: #94a3b8; font-size: 13px; margin: 0 0 14px 18px; line-height: 1.6; }
+    .link-btn { background: none; color: #94a3b8; font-weight: 400; font-size: 12px; margin-top: 10px; padding: 4px; }
+    .link-btn:hover { background: none; color: #f1f5f9; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Business Banking Dashboard</h1>
     <p>Log in with your account to view live company accounts.</p>
-    <form id="loginForm">
-      <input type="email" id="email" placeholder="Email" autofocus required />
-      <input type="password" id="password" placeholder="Password" required />
+    <form id="loginForm" class="step active">
+      <input type="email" id="email" placeholder="Email" autocomplete="username" autofocus required />
+      <input type="password" id="password" placeholder="Password" autocomplete="current-password" required />
       <button type="submit">Log in</button>
-      <div class="error" id="error">Incorrect email or password</div>
+      <div class="error" id="loginError"></div>
+    </form>
+
+    <form id="codeForm" class="step">
+      <p>Enter the 6-digit code from your authenticator app.</p>
+      <input type="text" id="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" required />
+      <button type="submit">Verify</button>
+      <div class="error" id="codeError"></div>
+      <button type="button" class="link-btn" onclick="startOver()">Back to login</button>
+    </form>
+
+    <form id="setupForm" class="step">
+      <p>Two-step login is required. Set it up once:</p>
+      <ol>
+        <li>Open an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password…)</li>
+        <li>Scan this QR code, or enter the key below</li>
+        <li>Type the 6-digit code it shows</li>
+      </ol>
+      <img id="qr" class="qr" alt="QR code for your authenticator app" />
+      <div class="key" id="setupKey"></div>
+      <input type="text" id="setupCode" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" required />
+      <button type="submit">Turn on two-step login</button>
+      <div class="error" id="setupError"></div>
+      <button type="button" class="link-btn" onclick="startOver()">Back to login</button>
     </form>
     <p style="margin-top:16px;margin-bottom:0;font-size:12px;text-align:center">
       <a href="/privacy.html" style="color:#94a3b8">Privacy Policy</a>
@@ -68,25 +99,82 @@
   </div>
 
   <script>
+    function show(id) {
+      document.querySelectorAll('.step').forEach(el => el.classList.toggle('active', el.id === id));
+      const input = document.querySelector(`#${id} input`);
+      if (input) input.focus();
+    }
+
+    function showError(id, message) {
+      const el = document.getElementById(id);
+      el.textContent = message;
+      el.style.display = 'block';
+    }
+
+    function startOver() {
+      document.querySelectorAll('.error').forEach(el => { el.style.display = 'none'; });
+      document.getElementById('password').value = '';
+      show('loginForm');
+    }
+
+    async function post(url, body) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { ok: res.ok, data };
+    }
+
+    // Login expired between steps (5 minute limit): send them back to the start.
+    function handleCodeFailure(errorId, data) {
+      if (/expired/i.test(data.error || '')) {
+        startOver();
+        showError('loginError', 'That took too long. Please log in again.');
+      } else {
+        showError(errorId, data.error || 'Something went wrong');
+      }
+    }
+
     document.getElementById('loginForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('email').value;
-      const password = document.getElementById('password').value;
-      const errorEl = document.getElementById('error');
       try {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password }),
+        const { ok, data } = await post('/api/login', {
+          email: document.getElementById('email').value,
+          password: document.getElementById('password').value,
         });
-        if (res.ok) {
-          window.location.href = '/';
+        if (!ok) return showError('loginError', data.error || 'Incorrect email or password');
+
+        if (data.next === 'setup-2fa') {
+          const res = await fetch('/api/2fa/setup');
+          const setup = await res.json();
+          if (!res.ok) return showError('loginError', setup.error || 'Could not start 2FA setup');
+          document.getElementById('qr').src = setup.qr;
+          document.getElementById('setupKey').textContent = setup.secret.match(/.{1,4}/g).join(' ');
+          show('setupForm');
         } else {
-          errorEl.style.display = 'block';
+          show('codeForm');
         }
       } catch {
-        errorEl.style.display = 'block';
+        showError('loginError', 'Could not reach the server');
       }
+    });
+
+    document.getElementById('codeForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const { ok, data } = await post('/api/2fa/verify', { code: document.getElementById('code').value });
+      if (ok) return (window.location.href = '/');
+      document.getElementById('code').value = '';
+      handleCodeFailure('codeError', data);
+    });
+
+    document.getElementById('setupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const { ok, data } = await post('/api/2fa/setup', { code: document.getElementById('setupCode').value });
+      if (ok) return (window.location.href = '/');
+      document.getElementById('setupCode').value = '';
+      handleCodeFailure('setupError', data);
     });
   </script>
 </body>
