@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Business Banking Dashboard</title>
+  <link rel="stylesheet" href="/vendor/flatpickr/flatpickr.min.css" />
+  <link rel="stylesheet" href="/vendor/flatpickr/themes/dark.css" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body class="role-unknown">
@@ -127,8 +129,8 @@
           <option value="in">Money in</option>
           <option value="out">Money out</option>
         </select>
-        <label class="date-label">From <input type="date" id="txnFrom" class="bank-filter" onchange="onTxnFilterChange()" /></label>
-        <label class="date-label">To <input type="date" id="txnTo" class="bank-filter" onchange="onTxnFilterChange()" /></label>
+        <label class="date-label">From <input type="text" id="txnFrom" class="bank-filter date-input" placeholder="dd/mm/yyyy" /></label>
+        <label class="date-label">To <input type="text" id="txnTo" class="bank-filter date-input" placeholder="dd/mm/yyyy" /></label>
         <button class="btn-danger" onclick="clearTxnFilters()">Clear</button>
       </div>
       <div class="txn-list" id="txnFeedList"></div>
@@ -137,6 +139,7 @@
   </main>
 
   <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script src="/vendor/flatpickr/flatpickr.min.js"></script>
   <script src="/js/dashboard.js"></script>
 </body>
 </html>
