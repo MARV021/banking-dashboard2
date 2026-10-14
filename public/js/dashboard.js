@@ -32,7 +32,25 @@ function toggleBankCollapse(id) {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
+// From/To pickers show dd/mm/yyyy but keep the underlying input value as
+// yyyy-mm-dd, which is what the filter compares against.
+const datePickers = {};
+function initDatePickers() {
+  ['txnFrom', 'txnTo'].forEach(id => {
+    datePickers[id] = flatpickr(`#${id}`, {
+      dateFormat: 'Y-m-d',
+      altInput: true,
+      altFormat: 'd/m/Y',
+      altInputClass: 'bank-filter date-input',
+      allowInput: true,
+      locale: { firstDayOfWeek: 1 },
+      onChange: onTxnFilterChange,
+    });
+  });
+}
+
 window.addEventListener('DOMContentLoaded', () => {
+  initDatePickers();
   loadMe();
   handleUrlParams();
   if (!resumePlaidOAuthIfNeeded()) {
@@ -274,7 +292,8 @@ function onTxnFilterChange() {
 }
 
 function clearTxnFilters() {
-  ['txnSearch', 'txnFrom', 'txnTo'].forEach(id => { document.getElementById(id).value = ''; });
+  document.getElementById('txnSearch').value = '';
+  Object.values(datePickers).forEach(picker => picker.clear(false));
   document.getElementById('txnDirection').value = 'all';
   document.getElementById('txnCategory').value = 'all';
   document.getElementById('txnBankFilter').value = 'all';

@@ -247,6 +247,9 @@ function requireAdmin(req, res, next) {
 }
 
 app.use(express.static(path.join(__dirname, '../public')));
+// Date picker for the transaction filters (UK dd/mm/yyyy regardless of the
+// browser's region, which the native date input would follow)
+app.use('/vendor/flatpickr', express.static(path.join(__dirname, '../node_modules/flatpickr/dist')));
 
 app.get('/api/me', (req, res) => {
   res.json({ email: req.user.email, role: req.user.role });

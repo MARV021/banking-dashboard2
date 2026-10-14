@@ -436,3 +436,5 @@ body:not(.role-viewer) .viewer-only { display: none !important; }
 .category-select { padding: 4px 8px; }
 .category-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .category-choices .btn-primary { padding: 14px; font-size: 14px; }
+
+.date-input { width: 120px; }
